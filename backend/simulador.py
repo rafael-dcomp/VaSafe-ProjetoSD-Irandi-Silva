@@ -5,7 +5,8 @@ import time
 
 # Configurações
 BROKER = "localhost"
-TOPIC = "vasafe/box_01/telemetria"
+# O TOPIC agora usa um coringa '#' que serve para qualquer caixa
+TOPIC_BASE = "vasafe/telemetria" 
 
 # --- CORREÇÃO AQUI (Adicionado VERSION1) ---
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "Simulador_PC")
@@ -13,23 +14,36 @@ client.connect(BROKER, 1883)
 
 print("SIMULADOR LIGADO! (Pressione Ctrl+C para parar)")
 
+# LISTA DE CAIXAS que o simulador vai usar
+CAIXAS_DISPONIVEIS = ["box_01", "box_02", "box_03", "box_04"]
+
+
 while True:
     try:
+        # 1. ESCOLHE UMA CAIXA ALEATORIAMENTE
+        box_id_selecionada = random.choice(CAIXAS_DISPONIVEIS)
+        
+        # 2. GERA DADOS ALEATÓRIOS
         temp = round(random.uniform(20.0, 30.0), 1)
         luz = random.randint(0, 4095)
         vib_raw = random.random()
         vib = "HIGH" if vib_raw > 0.9 else "LOW"
 
+        # 3. CRIA O PAYLOAD
         payload = {
-            "box_id": "box_01",
+            "box_id": box_id_selecionada, # <-- AGORA É DINÂMICO!
             "temp": temp,
             "vib": vib,
             "luz": luz
         }
         
         mensagem = json.dumps(payload)
-        client.publish(TOPIC, mensagem)
-        print(f"Enviado: {mensagem}")
+        
+        # 4. PUBLICA NO TÓPICO DA CAIXA ESCOLHIDA
+        topic_publicacao = f"vasafe/{box_id_selecionada}/telemetria"
+        client.publish(topic_publicacao, mensagem)
+        
+        print(f"Enviado [{box_id_selecionada}]: {mensagem}")
         
         time.sleep(2)
     except KeyboardInterrupt:
