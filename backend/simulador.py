@@ -5,16 +5,14 @@ import time
 
 # Configurações
 BROKER = "localhost"
-# O TOPIC agora usa um coringa '#' que serve para qualquer caixa
+
 TOPIC_BASE = "vasafe/telemetria" 
 
-# --- CORREÇÃO AQUI (Adicionado VERSION1) ---
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1, "Simulador_PC")
 client.connect(BROKER, 1883)
 
 print("SIMULADOR LIGADO! (Pressione Ctrl+C para parar)")
 
-# LISTA DE CAIXAS que o simulador vai usar
 CAIXAS_DISPONIVEIS = ["box_01", "box_02", "box_03", "box_04"]
 
 
@@ -31,7 +29,7 @@ while True:
 
         # 3. CRIA O PAYLOAD
         payload = {
-            "box_id": box_id_selecionada, # <-- AGORA É DINÂMICO!
+            "box_id": box_id_selecionada, 
             "temp": temp,
             "vib": vib,
             "luz": luz
