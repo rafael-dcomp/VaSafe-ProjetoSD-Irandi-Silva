@@ -46,7 +46,6 @@ def on_message(client, userdata, msg):
     except Exception as e:
         print(f"Erro: {e}")
 
-# --- CORREÇÃO AQUI (Adicionado VERSION1) ---
 client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION1)
 
 client.on_message = on_message
