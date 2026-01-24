@@ -13,162 +13,169 @@
 #define SCREEN_HEIGHT 64
 
 // --- CONFIGURAÇÕES DE REDE ---
+// ⚠ VERIFIQUE SE O IP DO BROKER MUDOU!
 const char* SSID_WIFI = "ENG.BRITO";       
 const char* SENHA_WIFI = "Engenheiros.com"; 
-const char* MQTT_SERVER = "192.168.3.219"; 
+const char* MQTT_SERVER = "192.168.3.219"; // <--- CONFIRME ESSE IP NO SEU COMPUTADOR
 const int MQTT_PORT = 1883;
 const char* BOX_ID = "box_01";
 
-// --- PINAGEM (ATUALIZADA) ---
+// --- PINAGEM ---
 #define PIN_DHT        15  // Sensor Temperatura
 #define PIN_LDR        34  // Sensor Luz (AO)
-#define PIN_BUZZER     4   // Buzzer (Alarme)
-
-// Pinos do RGB
+#define PIN_BUZZER     4   // Buzzer
 #define PIN_RGB_R      19  // Vermelho
 #define PIN_RGB_G      18  // Verde
 #define PIN_RGB_B      5   // Azul
 
-// --- OBJETOS GLOBAIS ---
+// --- OBJETOS ---
 WiFiClient espClient;
 PubSubClient client(espClient);
 DHT dht(PIN_DHT, DHT11); 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
-// --- VARIÁVEIS DE CONTROLE ---
+// --- VARIÁVEIS ---
 const int MAX_BUFFER_SIZE = 500; 
 std::vector<String> offlineBuffer;
 unsigned long lastMsg = 0;
 String boxStatus = "AGUARDANDO...";
 
-// Controle de Pisca (RGB Vermelho)
+// Controle de Pisca (RGB)
 unsigned long previousMillisBlink = 0;
 bool ledState = LOW;
 
-// --- FUNÇÃO AUXILIAR: DEFINIR COR RGB ---
+// --- AJUSTE DE SENSIBILIDADE DA LUZ ---
+// Se o número no Serial for MAIOR que isso, apita.
+// Ajuste conforme o que aparecer no seu monitor serial.
+const int LIMITE_LUZ_ALARME = 2000; 
+
 void setRGB(int r, int g, int b) {
-  // Se for Cátodo Comum (GND comum), use HIGH para acender
   digitalWrite(PIN_RGB_R, r);
   digitalWrite(PIN_RGB_G, g);
   digitalWrite(PIN_RGB_B, b);
 }
 
-// --- CONTROLE DE HARDWARE (LEDS + BUZZER) ---
 void atualizarHardware(bool online, bool erroSensor, int luz) {
   unsigned long currentMillis = millis();
 
-  // 1. LÓGICA DO BUZZER (ALARME DE LUZ)
-  // Se a luz passar de 2000, a caixa abriu -> APITA!
-  if (luz > 2000) { 
-    digitalWrite(PIN_BUZZER, HIGH); // Apita
+  // 1. BUZZER (Debug no Serial para calibração)
+  if (luz > LIMITE_LUZ_ALARME) { 
+    digitalWrite(PIN_BUZZER, HIGH);
   } else {
-    digitalWrite(PIN_BUZZER, LOW);  // Silêncio
+    digitalWrite(PIN_BUZZER, LOW);  
   }
 
-  // 2. LÓGICA DO LED RGB
-  
-  // PRIORIDADE 1: ERRO DE SENSOR (PISCA VERMELHO)
+  // 2. LED RGB
   if (erroSensor) {
+    // Pisca Vermelho (Erro leitura DHT)
     if (currentMillis - previousMillisBlink >= 200) {
       previousMillisBlink = currentMillis;
       ledState = !ledState;
-      // Pisca Vermelho
       setRGB(ledState, 0, 0); 
     }
   }
-  // PRIORIDADE 2: ONLINE (VERDE)
   else if (online) {
-    setRGB(0, 1, 0); // R=0, G=1, B=0
+    setRGB(0, 1, 0); // Verde (Conectado no MQTT)
   }
-  // PRIORIDADE 3: OFFLINE (AMARELO -> VERMELHO + VERDE)
   else {
-    setRGB(1, 1, 0); // Mistura R+G = Amarelo
+    setRGB(1, 1, 0); // Amarelo (Sem conexão)
   }
 }
 
-// --- DESENHO NA TELA ---
 void drawScreen(float temp, int luz, int bufferSize, bool online, bool erro) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
-  // Bolinhas Digitais (Mantivemos para combinar com o RGB)
+  // Status visual (Bolinhas)
   int r = 3; int yPos = 5;
-  int xG = 105; int xY = 115; int xR = 125;
-  display.drawCircle(xG, yPos, r, SSD1306_WHITE);
-  display.drawCircle(xY, yPos, r, SSD1306_WHITE);
-  display.drawCircle(xR, yPos, r, SSD1306_WHITE);
+  if (erro) display.fillCircle(125, yPos, r, SSD1306_WHITE);
+  else if (online) display.fillCircle(105, yPos, r, SSD1306_WHITE);
+  else display.fillCircle(115, yPos, r, SSD1306_WHITE);
 
-  if (erro) display.fillCircle(xR, yPos, r, SSD1306_WHITE);
-  else if (online) display.fillCircle(xG, yPos, r, SSD1306_WHITE);
-  else display.fillCircle(xY, yPos, r, SSD1306_WHITE);
-
-  // Linha 1: Status Texto
   display.setTextSize(1);
   display.setCursor(0, 0);
   if (erro) display.print("ERRO SENSOR");
-  else if (online) display.print("SISTEMA OK");
-  else display.print("MODO BUFFER");
+  else if (online) display.print("CONECTADO");
+  else display.print("DESCONECTADO");
 
-  // Linha 2: Temperatura
   display.setCursor(0, 15);
   display.setTextSize(2);
-  if (isnan(temp)) {
-    display.print("--.- C"); 
-  } else {
-    display.print(temp, 1);
-    display.print(" C");
-  }
+  if (isnan(temp)) display.print("--.- C"); 
+  else { display.print(temp, 1); display.print(" C"); }
 
-  // Linha 3: Luz e Alarme
   display.setTextSize(1);
   display.setCursor(0, 38);
   display.print("Luz: ");
-  display.print(luz);
+  display.print(luz); // <-- VALOR IMPORTANTE PARA CALIBRAR
   
-  // Aviso visual de alarme
-  if (luz > 2000) {
+  if (luz > LIMITE_LUZ_ALARME) {
     display.setCursor(65, 38);
     display.print("!ALARME!");
   }
 
-  // Linha 4: Memória
   display.setCursor(0, 52);
-  display.print("Mem:");
-  display.print(bufferSize);
+  display.print("Mem:"); display.print(bufferSize);
   
-  display.setCursor(60, 52);
-  if (boxStatus == "CRITICO!") display.setTextColor(SSD1306_BLACK, SSD1306_WHITE); 
-  display.print(boxStatus);
-  display.setTextColor(SSD1306_WHITE);
+  display.setCursor(50, 52);
+  display.print(boxStatus); // "AGUARDANDO" ou Status do Server
 
   display.display();
 }
 
 void setup_wifi() {
   delay(10);
+  Serial.println();
+  Serial.print("Conectando WiFi: ");
+  Serial.println(SSID_WIFI);
   WiFi.begin(SSID_WIFI, SENHA_WIFI);
+  
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  Serial.println("\nWiFi Conectado!");
+  Serial.print("IP: ");
+  Serial.println(WiFi.localIP());
 }
 
+// Recebe mensagens do Servidor (Backend)
 void callback(char* topic, byte* payload, unsigned int length) {
   String message;
   for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
   
+  Serial.print("Mensagem recebida [");
+  Serial.print(topic);
+  Serial.print("]: ");
+  Serial.println(message);
+
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, message);
 
-  if (!error && doc.containsKey("led")) {
-    const char* color = doc["led"];
-    if (strcmp(color, "GREEN") == 0) boxStatus = "OK";
-    else if (strcmp(color, "RED") == 0) boxStatus = "CRITICO!";
-    else if (strcmp(color, "YELLOW") == 0) boxStatus = "ALERTA";
+  if (!error) {
+    // Atualiza status se o servidor mandar
+    if (doc.containsKey("led")) {
+       const char* color = doc["led"];
+       if (strcmp(color, "GREEN") == 0) boxStatus = "OK";
+       else if (strcmp(color, "RED") == 0) boxStatus = "CRITICO!";
+       else if (strcmp(color, "YELLOW") == 0) boxStatus = "ALERTA";
+    }
   }
 }
 
 void tryReconnect() {
   if (WiFi.status() == WL_CONNECTED && !client.connected()) {
+    Serial.print("Tentando MQTT... ");
+    // Tenta conectar com mensagem de 'Last Will' (se cair avisa)
     if (client.connect(BOX_ID, "vasafe/box_01/status", 1, true, "OFFLINE")) {
+      Serial.println("CONECTADO!");
+      // Avisa que entrou
       client.publish("vasafe/box_01/status", "ONLINE");
+      // Escuta comandos do servidor
       client.subscribe("vasafe/box_01/comando");
+    } else {
+      Serial.print("Falha, rc=");
+      Serial.print(client.state());
+      Serial.println(" tenta de novo em 5s");
     }
   }
 }
@@ -176,28 +183,20 @@ void tryReconnect() {
 void setup() {
   Serial.begin(115200);
 
-  // Configuração Pinos RGB e Buzzer
   pinMode(PIN_RGB_R, OUTPUT);
   pinMode(PIN_RGB_G, OUTPUT);
   pinMode(PIN_RGB_B, OUTPUT);
   pinMode(PIN_BUZZER, OUTPUT);
   
-  // Teste de Cores Inicial (RGB) e Buzzer
-  setRGB(1, 0, 0); delay(200); // Vermelho
-  setRGB(0, 1, 0); delay(200); // Verde
-  setRGB(0, 0, 1); delay(200); // Azul
-  setRGB(0, 0, 0); // Desliga
-  
-  // Apito curto de teste
+  // Teste de vida do hardware
+  setRGB(1,1,1); delay(500); setRGB(0,0,0);
   digitalWrite(PIN_BUZZER, HIGH); delay(100); digitalWrite(PIN_BUZZER, LOW);
 
   Wire.begin(21, 22);
-  if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("FALHA NO OLED");
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
+    Serial.println(F("Falha OLED")); 
   } else {
     display.clearDisplay();
-    display.setTextColor(SSD1306_WHITE);
-    display.println("Iniciando...");
     display.display();
   }
 
@@ -214,26 +213,24 @@ void loop() {
   client.loop();
 
   unsigned long now = millis();
-  
-  // --- LEITURA INSTANTÂNEA PARA RGB E BUZZER ---
-  float checkTemp = dht.readTemperature();
-  int checkLuz = analogRead(PIN_LDR); // Leitura para o alarme
-  
-  bool sensorError = isnan(checkTemp);
-  bool isOnline = client.connected();
 
-  // Controla cor do LED e Som do Buzzer
-  atualizarHardware(isOnline, sensorError, checkLuz);
+  // Leitura Sensores
+  float temp = dht.readTemperature();
+  int luz = analogRead(PIN_LDR); 
 
-  // --- LOOP DE ENVIO (2 segundos) ---
+  // Debug instantâneo no Serial (AJUDA A CALIBRAR O BUZZER)
+  // Serial.print("Luz: "); Serial.println(luz); 
+
+  // Controle Hardware
+  atualizarHardware(client.connected(), isnan(temp), luz);
+
+  // Envio a cada 2 segundos
   if (now - lastMsg > 2000) {
     lastMsg = now;
-
-    float temp = dht.readTemperature();
-    int luz = analogRead(PIN_LDR);
-
+    
     if (isnan(temp)) temp = 0.0; 
 
+    // Cria JSON
     StaticJsonDocument<256> doc;
     doc["box_id"] = BOX_ID;
     doc["temp"] = temp;
@@ -243,24 +240,27 @@ void loop() {
     serializeJson(doc, buffer);
     String jsonString = String(buffer);
 
-    // Lógica de Envio / Buffer
-    if (isOnline && !sensorError) {
+    // Envia se estiver online
+    if (client.connected()) {
+      Serial.print("Enviando JSON: ");
+      Serial.println(jsonString);
       client.publish("vasafe/box_01/telemetria", buffer);
-      while (offlineBuffer.size() > 0) {
-        client.publish("vasafe/box_01/telemetria", offlineBuffer[0].c_str());
+      
+      // Esvazia buffer se tiver coisa velha guardada
+      while (!offlineBuffer.empty()) {
+        client.publish("vasafe/box_01/telemetria", offlineBuffer.front().c_str());
         offlineBuffer.erase(offlineBuffer.begin());
         delay(50);
       }
     } else {
-      if (!sensorError) {
-         if ((int)offlineBuffer.size() < MAX_BUFFER_SIZE) {
-           offlineBuffer.push_back(jsonString);
-         } else {
-           offlineBuffer.erase(offlineBuffer.begin());
-           offlineBuffer.push_back(jsonString);
-         }
+      // Guarda no Buffer se estiver offline
+      Serial.println("Offline. Salvando no buffer.");
+      if (offlineBuffer.size() >= MAX_BUFFER_SIZE) {
+        offlineBuffer.erase(offlineBuffer.begin());
       }
+      offlineBuffer.push_back(jsonString);
     }
-    drawScreen(temp, luz, offlineBuffer.size(), isOnline, sensorError);
+    
+    drawScreen(temp, luz, offlineBuffer.size(), client.connected(), isnan(temp));
   }
 }
