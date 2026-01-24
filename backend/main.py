@@ -7,9 +7,7 @@ import os
 import json
 from datetime import datetime
 
-# ==========================================
-# CONFIGURAÇÃO INICIAL
-# ==========================================
+
 app = FastAPI(title="VaSafe Digital Twin API")
 
 # Configuração de CORS (Permite que o React acesse esta API)
