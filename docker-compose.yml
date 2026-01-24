@@ -1,25 +1,33 @@
+version: "3.8"
+
 services:
   mosquitto:
-    image: eclipse-mosquitto
+    image: eclipse-mosquitto:2
+    container_name: mosquitto
+    restart: always
     ports:
-      - "1883:1883"
-      - "9001:9001"
+      - "1883:1883"      # ESP32 / host
+      - "9001:9001"      # WebSocket (opcional)
     volumes:
       - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+      - mosquitto_data:/mosquitto/data
+      - mosquitto_log:/mosquitto/log
     networks:
       - vasafe_net
 
   influxdb:
     image: influxdb:2.7
+    container_name: influxdb
+    restart: always
     ports:
       - "8086:8086"
     environment:
-      - DOCKER_INFLUXDB_INIT_MODE=setup
-      - DOCKER_INFLUXDB_INIT_USERNAME=admin
-      - DOCKER_INFLUXDB_INIT_PASSWORD=senhaforte123
-      - DOCKER_INFLUXDB_INIT_ORG=ufsvasafe
-      - DOCKER_INFLUXDB_INIT_BUCKET=telemetria
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=token-secreto
+      DOCKER_INFLUXDB_INIT_MODE: setup
+      DOCKER_INFLUXDB_INIT_USERNAME: admin
+      DOCKER_INFLUXDB_INIT_PASSWORD: senhaforte123
+      DOCKER_INFLUXDB_INIT_ORG: ufsvasafe
+      DOCKER_INFLUXDB_INIT_BUCKET: telemetria
+      DOCKER_INFLUXDB_INIT_ADMIN_TOKEN: token-secreto
     volumes:
       - influxdb_data:/var/lib/influxdb2
     networks:
@@ -27,14 +35,17 @@ services:
 
   api:
     build: ./backend
+    container_name: api_backend
+    restart: always
     ports:
       - "8000:8000"
     environment:
-      - MQTT_BROKER=mosquitto
-      - INFLUX_URL=http://influxdb:8086
-      - DOCKER_INFLUXDB_INIT_ORG=ufsvasafe
-      - DOCKER_INFLUXDB_INIT_BUCKET=telemetria
-      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=token-secreto
+      MQTT_BROKER: mosquitto
+      MQTT_PORT: 1883
+      INFLUX_URL: http://influxdb:8086
+      INFLUX_ORG: ufsvasafe
+      INFLUX_BUCKET: telemetria
+      INFLUX_TOKEN: token-secreto
     depends_on:
       - mosquitto
       - influxdb
@@ -43,11 +54,9 @@ services:
 
   frontend:
     build: ./frontend
+    container_name: frontend
     ports:
       - "5173:5173"
-    volumes:
-      - ./frontend:/app
-      - /app/node_modules 
     depends_on:
       - api
     networks:
@@ -55,6 +64,8 @@ services:
 
 volumes:
   influxdb_data:
+  mosquitto_data:
+  mosquitto_log:
 
 networks:
   vasafe_net:
