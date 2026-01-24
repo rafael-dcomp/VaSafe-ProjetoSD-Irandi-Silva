@@ -1,0 +1,61 @@
+services:
+  mosquitto:
+    image: eclipse-mosquitto
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - vasafe_net
+
+  influxdb:
+    image: influxdb:2.7
+    ports:
+      - "8086:8086"
+    environment:
+      - DOCKER_INFLUXDB_INIT_MODE=setup
+      - DOCKER_INFLUXDB_INIT_USERNAME=admin
+      - DOCKER_INFLUXDB_INIT_PASSWORD=senhaforte123
+      - DOCKER_INFLUXDB_INIT_ORG=ufsvasafe
+      - DOCKER_INFLUXDB_INIT_BUCKET=telemetria
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=token-secreto
+    volumes:
+      - influxdb_data:/var/lib/influxdb2
+    networks:
+      - vasafe_net
+
+  api:
+    build: ./backend
+    ports:
+      - "8000:8000"
+    environment:
+      - MQTT_BROKER=mosquitto
+      - INFLUX_URL=http://influxdb:8086
+      - DOCKER_INFLUXDB_INIT_ORG=ufsvasafe
+      - DOCKER_INFLUXDB_INIT_BUCKET=telemetria
+      - DOCKER_INFLUXDB_INIT_ADMIN_TOKEN=token-secreto
+    depends_on:
+      - mosquitto
+      - influxdb
+    networks:
+      - vasafe_net
+
+  frontend:
+    build: ./frontend
+    ports:
+      - "5173:5173"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules 
+    depends_on:
+      - api
+    networks:
+      - vasafe_net
+
+volumes:
+  influxdb_data:
+
+networks:
+  vasafe_net:
+    driver: bridge

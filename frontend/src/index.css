@@ -1,0 +1,108 @@
+:root {
+  --primary-color: #0056b3;       
+  --primary-hover: #004494;
+  --secondary-color: #6c757d;
+  
+  --bg-app: #f0f2f5;             
+  --bg-card: #ffffff;           
+  
+  --text-main: #212529;           
+  --text-muted: #6c757d;          
+ 
+  --danger: #dc3545;
+  --success: #28a745;
+  --warning: #ffc107;
+  
+  --shadow-sm: 0 2px 4px rgba(0,0,0,0.05);
+  --shadow-md: 0 4px 6px rgba(0,0,0,0.1);
+  --radius: 8px;
+}
+
+*, *::before, *::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  padding: 0;
+  font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  line-height: 1.6;
+  -webkit-font-smoothing: antialiased;
+  min-height: 100vh;
+}
+
+#root {
+  width: 100%;
+  min-height: 100vh;
+}
+
+h1, h2, h3, h4 {
+  font-weight: 600;
+  margin-top: 0;
+  color: var(--text-main);
+}
+
+button {
+  font-family: inherit;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  border: none;
+  font-size: 0.95rem;
+}
+
+button:hover {
+  transform: translateY(-1px); 
+  box-shadow: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+button:active {
+  transform: translateY(0);
+}
+
+input, select {
+  font-family: inherit;
+  border: 1px solid #ced4da;
+  border-radius: var(--radius);
+  outline: none;
+  transition: border-color 0.2s;
+  font-size: 1rem;
+}
+
+input:focus, select:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 3px rgba(0, 86, 179, 0.15);
+}
+
+::-webkit-scrollbar {
+  width: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #cbd5e0;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a0aec0;
+}
+
+.card {
+  background-color: var(--bg-card);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+  padding: 20px;
+  border: 1px solid rgba(0,0,0,0.05);
+}
+
+.text-danger { color: var(--danger); }
+.text-success { color: var(--success); }
+.text-muted { color: var(--text-muted); }
+
+@media (max-width: 768px) {
+  h1 { font-size: 1.8rem; }
+  .card { padding: 15px; }
+}
