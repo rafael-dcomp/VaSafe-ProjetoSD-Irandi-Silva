@@ -6,34 +6,23 @@
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
-#include <vector> // Biblioteca para criar o Buffer Dinâmico
+#include <vector> 
 
-// ==========================================
-// 1. CONFIGURAÇÕES
-// ==========================================
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
-// SUAS CREDENCIAIS
 const char* SSID_WIFI = "ENG.BRITO";
 const char* SENHA_WIFI = "Engenheiros.com";
 const char* MQTT_SERVER = "192.168.3.219";
 const int MQTT_PORT = 1883;
 const char* BOX_ID = "box_01";
 
-// Limite de segurança para não estourar a memória RAM da ESP32
 const int MAX_BUFFER_SIZE = 500;
 
-// ==========================================
-// 2. PINAGEM
-// ==========================================
 #define PIN_DHT     15  // Sensor Temperatura
 #define PIN_LDR     34  // Sensor Luz (AO - Analogico)
 #define PIN_BTN     4   // Botão
 
-// ==========================================
-// 3. OBJETOS E VARIÁVEIS
-// ==========================================
 WiFiClient espClient;
 PubSubClient client(espClient);
 DHT dht(PIN_DHT, DHT11);
@@ -46,9 +35,6 @@ int buttonPressCount = 0;
 bool lastButtonState = HIGH;
 String boxStatus = "AGUARDANDO...";
 
-// ==========================================
-// 4. FUNÇÃO VISUAL (OLED)
-// ==========================================
 void drawScreen(float temp, String vibStatus, int bufferSize, bool online) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
@@ -68,7 +54,7 @@ void drawScreen(float temp, String vibStatus, int bufferSize, bool online) {
   display.setCursor(0, 15);
   display.setTextSize(2);
   if (isnan(temp)) {
-    display.print("--.- C"); // Mostra traços se der erro
+    display.print("--.- C"); 
   } else {
     display.print(temp, 1);
     display.print(" C");
@@ -95,10 +81,6 @@ void drawScreen(float temp, String vibStatus, int bufferSize, bool online) {
 
   display.display();
 }
-
-// ==========================================
-// 5. REDE
-// ==========================================
 void setup_wifi() {
   delay(10);
   Serial.println();
@@ -140,10 +122,6 @@ void tryReconnect() {
     }
   }
 }
-
-// ==========================================
-// 6. SETUP
-// ==========================================
 void setup() {
   Serial.begin(115200);
   Serial.println("\n=== INICIANDO SISTEMA VASAFE ===");
@@ -172,9 +150,6 @@ void setup() {
   client.setCallback(callback);
 }
 
-// ==========================================
-// 7. LOOP PRINCIPAL
-// ==========================================
 void loop() {
   if (WiFi.status() != WL_CONNECTED) {
     // WiFi caindo...
@@ -196,7 +171,6 @@ void loop() {
   if (now - lastMsg > 2000) {
     lastMsg = now;
 
-    // --- DIAGNÓSTICO (LEITURA DETALHADA) ---
     Serial.println("\n--- LEITURA DE SENSORES ---");
     
     // 1. Temperatura
@@ -217,13 +191,11 @@ void loop() {
     if(luz == 0 || luz == 4095) Serial.print(" <- ALERTA: Pode precisar calibrar parafuso!");
     Serial.println();
 
-    // 3. Vibração
     String vibLevel = (buttonPressCount >= 2) ? "ALTA" : "BAIXA";
     buttonPressCount = 0;
     Serial.print("Vibração detectada: ");
     Serial.println(vibLevel);
 
-    // --- JSON ---
     StaticJsonDocument<256> doc;
     doc["box_id"] = BOX_ID;
     doc["temp"] = temp;
@@ -234,7 +206,6 @@ void loop() {
     serializeJson(doc, buffer);
     String jsonString = String(buffer);
 
-    // --- ENVIO ---
     if (client.connected()) {
       Serial.print("Enviando MQTT: ");
       Serial.println(jsonString);
