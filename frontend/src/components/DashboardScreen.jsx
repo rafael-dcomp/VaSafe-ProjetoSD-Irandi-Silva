@@ -5,6 +5,7 @@ const API_URL = "http://localhost:8000";
 
 const getStatusColor = (score) => {
   if (score === undefined || score === null) return '#cbd5e1'; 
+  if (score === 0) return '#000000'; // Preto para fraude/violação
   if (score >= 90) return '#22c55e'; 
   if (score >= 60) return '#eab308'; 
   return '#ef4444'; 
@@ -23,10 +24,10 @@ export default function DashboardScreen({ estoqueConfig, onSelectCaixa }) {
         novosStatus[item.id] = {
           score: res.data.analise_risco.health_score,
           temp: res.data.telemetria.temperatura_atual,
-          bat: res.data.telemetria.bateria_atual
+          status: res.data.analise_risco.status_operacional
         };
       } catch (e) {
-        novosStatus[item.id] = { score: 0, temp: 0, bat: 0, erro: true };
+        novosStatus[item.id] = { score: null, temp: 0, erro: true };
       }
     }));
     
@@ -46,9 +47,9 @@ export default function DashboardScreen({ estoqueConfig, onSelectCaixa }) {
       <div className="caixa-grid">
         {estoqueConfig.map((item) => {
           const dados = resumoEstoque[item.id];
-          const score = dados ? dados.score : 0;
-          const bat = dados ? dados.bat : 0;
+          const score = dados ? dados.score : null;
           const corStatus = getStatusColor(score);
+          const isErro = dados?.erro;
           
           return (
             <div 
@@ -61,8 +62,8 @@ export default function DashboardScreen({ estoqueConfig, onSelectCaixa }) {
                 <div className="icon-bg" style={{backgroundColor: corStatus + '20'}}>
                   <span style={{fontSize: '20px'}}>❄️</span>
                 </div>
-                <span className={`status-pill ${score < 60 ? 'piscar' : ''}`} style={{backgroundColor: corStatus}}>
-                  {score ? `${score}% Saúde` : 'Crítico'}
+                <span className="status-pill" style={{backgroundColor: corStatus, color: '#fff'}}>
+                  {isErro ? 'OFFLINE' : (score === 0 ? 'FRAUDE' : `${score}% Saúde`)}
                 </span>
               </div>
 
@@ -73,14 +74,12 @@ export default function DashboardScreen({ estoqueConfig, onSelectCaixa }) {
               
               <div className="caixa-stats-row">
                 <div className="stat-item">
-                  <small>Temp. Atual</small>
-                  <strong>{dados ? `${dados.temp.toFixed(1)}°C` : '--'}</strong>
+                  <small>Temperatura</small>
+                  <strong>{dados && !isErro ? `${dados.temp.toFixed(1)}°C` : '--'}</strong>
                 </div>
-                <div className="stat-item" style={{alignItems: 'flex-end'}}>
-                  <small>Bateria</small>
-                  <strong style={{color: bat < 20 ? '#ef4444' : '#1e293b'}}>
-                     🔋 {bat ? bat.toFixed(0) : 0}%
-                  </strong>
+                <div className="stat-item">
+                   <small>ID</small>
+                   <span style={{fontSize:'0.8rem'}}>{item.id}</span>
                 </div>
               </div>
             </div>

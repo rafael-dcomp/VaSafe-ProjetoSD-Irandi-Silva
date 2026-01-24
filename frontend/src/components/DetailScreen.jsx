@@ -31,27 +31,39 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
 
   if (!analise) {
     return (
-      <div style={{textAlign:'center', padding:'50px', color:'#94a3b8'}}>
+      <div className="loading-container">
         <h2>⌛</h2>
-        <p>Carregando Digital Twin...</p>
+        <p>Conectando ao Digital Twin...</p>
       </div>
     );
   }
 
+  // --- LÓGICA DE SEGURANÇA ---
+  const isViolado = analise.telemetria.violacao; // Vem da API/ESP32
+  const isAberta = analise.telemetria.tampa_aberta; // Vem da API/ESP32
+
+  // Define a cor da borda/fundo baseado no perigo
+  let containerClass = "";
+  if (isViolado) containerClass = "alert-violation";
+  else if (isAberta) containerClass = "alert-open";
+
   return (
-    <div>
-      <div className="controls-area" style={{display:'flex', justifyContent:'space-between', alignItems:'center'}}>
+    <div className={`detail-wrapper ${containerClass}`}>
+      <div className="controls-area">
         <button onClick={onVoltar} className="btn-voltar">
           ⬅ Voltar para o Estoque
         </button>
-        <div style={{fontSize:'12px', color: '#94a3b8'}}>
-          {lastUpdate ? `📡 Atualizado às: ${lastUpdate}` : 'Conectando...'}
+        <div className="update-badge">
+          {lastUpdate ? `📡 Atualizado: ${lastUpdate}` : 'Conectando...'}
         </div>
       </div>
 
-      <h2 style={{marginTop: 0, color:'#334155'}}>
-        Analítica: {caixaNome}
-      </h2>
+      <div className="header-detail">
+        <h2 style={{color: isViolado ? 'red' : '#334155'}}>
+            {isViolado ? "⚠️ CAIXA VIOLADA ⚠️" : `Analítica: ${caixaNome}`}
+        </h2>
+        {isAberta && !isViolado && <span className="tag-aberta">TAMPA ABERTA</span>}
+      </div>
 
       <StatusBadge 
         status={analise.analise_risco.status_operacional} 
@@ -73,21 +85,22 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
           cor="#2563eb"
         />
         <StatCard 
+          titulo="Segurança" 
+          valor={isViolado ? "CRÍTICO" : (isAberta ? "ALERTA" : "OK")} 
+          unidade="" 
+          cor={isViolado ? '#ef4444' : (isAberta ? '#eab308' : '#22c55e')} 
+        />
+        {/* Usamos Bateria caso venha da API, senão placeholder */}
+        <StatCard 
           titulo="Bateria" 
-          valor={analise.telemetria.bateria_atual} 
+          valor={analise.telemetria.bateria_atual || "--"} 
           unidade="%" 
           cor="#8b5cf6" 
-        />
-        <StatCard 
-          titulo="Umidade" 
-          valor={analise.telemetria.umidade_atual} 
-          unidade="%" 
-          cor="#0891b2"
         />
       </div>
 
       <div className="panel">
-        <h3>Histórico: Temperatura vs Bateria</h3>
+        <h3>Histórico em Tempo Real</h3>
         <div className="chart-container">
           <ResponsiveContainer width="100%" height="100%">
             <LineChart data={analise.telemetria.historico.map(d => ({
@@ -97,14 +110,26 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
               
               <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
               <XAxis dataKey="time" tick={{fontSize: 12}} />
-              <YAxis yAxisId="left" domain={['auto', 'auto']} unit="°C" stroke="#2563eb" />
-              <YAxis yAxisId="right" orientation="right" domain={[0, 100]} unit="%" stroke="#8b5cf6"/>
+              <YAxis domain={['auto', 'auto']} unit="°C" stroke="#2563eb" />
               <Tooltip contentStyle={{borderRadius:'8px'}}/>
               <Legend />
 
-              <Line yAxisId="left" type="monotone" dataKey="temperatura" stroke="#2563eb" strokeWidth={3} dot={false} isAnimationActive={false} name="Temp (°C)" />
-              <Line yAxisId="right" type="monotone" dataKey="bateria" stroke="#8b5cf6" strokeWidth={2} dot={false} isAnimationActive={false} name="Bateria (%)" />
-              <Line yAxisId="left" type="monotone" dataKey={() => 8} stroke="#ef4444" strokeDasharray="5 5" name="Limite Max" dot={false} />
+              <Line 
+                type="monotone" 
+                dataKey="temperatura" 
+                stroke={isViolado ? "#000000" : "#2563eb"} 
+                strokeWidth={3} 
+                dot={false} 
+                name="Temp (°C)" 
+              />
+              <Line 
+                type="step" 
+                dataKey="aberta" 
+                stroke="#eab308" 
+                strokeWidth={2} 
+                dot={false} 
+                name="Tampa Aberta (0/1)" 
+              />
             
             </LineChart>
           </ResponsiveContainer>

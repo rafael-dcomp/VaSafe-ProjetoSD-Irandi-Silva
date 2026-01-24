@@ -8,47 +8,106 @@
 #include <Adafruit_SSD1306.h>
 #include <vector> 
 
+// --- CONFIGURAÇÕES DE TELA ---
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 
-const char* SSID_WIFI = "ENG.BRITO";
-const char* SENHA_WIFI = "Engenheiros.com";
-const char* MQTT_SERVER = "192.168.3.219";
+// --- CONFIGURAÇÕES DE REDE ---
+const char* SSID_WIFI = "ENG.BRITO";       
+const char* SENHA_WIFI = "Engenheiros.com"; 
+const char* MQTT_SERVER = "192.168.3.219"; 
 const int MQTT_PORT = 1883;
 const char* BOX_ID = "box_01";
 
-const int MAX_BUFFER_SIZE = 500;
+// --- PINAGEM (ATUALIZADA) ---
+#define PIN_DHT        15  // Sensor Temperatura
+#define PIN_LDR        34  // Sensor Luz (AO)
+#define PIN_BUZZER     4   // Buzzer (Alarme)
 
-#define PIN_DHT     15  // Sensor Temperatura
-#define PIN_LDR     34  // Sensor Luz (AO - Analogico)
-#define PIN_BTN     4   // Botão
+// Pinos do RGB
+#define PIN_RGB_R      19  // Vermelho
+#define PIN_RGB_G      18  // Verde
+#define PIN_RGB_B      5   // Azul
 
+// --- OBJETOS GLOBAIS ---
 WiFiClient espClient;
 PubSubClient client(espClient);
-DHT dht(PIN_DHT, DHT11);
+DHT dht(PIN_DHT, DHT11); 
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 
+// --- VARIÁVEIS DE CONTROLE ---
+const int MAX_BUFFER_SIZE = 500; 
 std::vector<String> offlineBuffer;
-
 unsigned long lastMsg = 0;
-int buttonPressCount = 0;
-bool lastButtonState = HIGH;
 String boxStatus = "AGUARDANDO...";
 
-void drawScreen(float temp, String vibStatus, int bufferSize, bool online) {
+// Controle de Pisca (RGB Vermelho)
+unsigned long previousMillisBlink = 0;
+bool ledState = LOW;
+
+// --- FUNÇÃO AUXILIAR: DEFINIR COR RGB ---
+void setRGB(int r, int g, int b) {
+  // Se for Cátodo Comum (GND comum), use HIGH para acender
+  digitalWrite(PIN_RGB_R, r);
+  digitalWrite(PIN_RGB_G, g);
+  digitalWrite(PIN_RGB_B, b);
+}
+
+// --- CONTROLE DE HARDWARE (LEDS + BUZZER) ---
+void atualizarHardware(bool online, bool erroSensor, int luz) {
+  unsigned long currentMillis = millis();
+
+  // 1. LÓGICA DO BUZZER (ALARME DE LUZ)
+  // Se a luz passar de 2000, a caixa abriu -> APITA!
+  if (luz > 2000) { 
+    digitalWrite(PIN_BUZZER, HIGH); // Apita
+  } else {
+    digitalWrite(PIN_BUZZER, LOW);  // Silêncio
+  }
+
+  // 2. LÓGICA DO LED RGB
+  
+  // PRIORIDADE 1: ERRO DE SENSOR (PISCA VERMELHO)
+  if (erroSensor) {
+    if (currentMillis - previousMillisBlink >= 200) {
+      previousMillisBlink = currentMillis;
+      ledState = !ledState;
+      // Pisca Vermelho
+      setRGB(ledState, 0, 0); 
+    }
+  }
+  // PRIORIDADE 2: ONLINE (VERDE)
+  else if (online) {
+    setRGB(0, 1, 0); // R=0, G=1, B=0
+  }
+  // PRIORIDADE 3: OFFLINE (AMARELO -> VERMELHO + VERDE)
+  else {
+    setRGB(1, 1, 0); // Mistura R+G = Amarelo
+  }
+}
+
+// --- DESENHO NA TELA ---
+void drawScreen(float temp, int luz, int bufferSize, bool online, bool erro) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
-  // Linha 1: Status Conexão
+  // Bolinhas Digitais (Mantivemos para combinar com o RGB)
+  int r = 3; int yPos = 5;
+  int xG = 105; int xY = 115; int xR = 125;
+  display.drawCircle(xG, yPos, r, SSD1306_WHITE);
+  display.drawCircle(xY, yPos, r, SSD1306_WHITE);
+  display.drawCircle(xR, yPos, r, SSD1306_WHITE);
+
+  if (erro) display.fillCircle(xR, yPos, r, SSD1306_WHITE);
+  else if (online) display.fillCircle(xG, yPos, r, SSD1306_WHITE);
+  else display.fillCircle(xY, yPos, r, SSD1306_WHITE);
+
+  // Linha 1: Status Texto
   display.setTextSize(1);
   display.setCursor(0, 0);
-  if (online) {
-    display.print("ONLINE  MQTT:OK");
-  } else {
-    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
-    display.print("OFFLINE (SALVANDO)");
-    display.setTextColor(SSD1306_WHITE);
-  }
+  if (erro) display.print("ERRO SENSOR");
+  else if (online) display.print("SISTEMA OK");
+  else display.print("MODO BUFFER");
 
   // Linha 2: Temperatura
   display.setCursor(0, 15);
@@ -60,32 +119,33 @@ void drawScreen(float temp, String vibStatus, int bufferSize, bool online) {
     display.print(" C");
   }
 
-  // Linha 3: Buffer e Vibração
+  // Linha 3: Luz e Alarme
   display.setTextSize(1);
-  display.setCursor(80, 15);
+  display.setCursor(0, 38);
+  display.print("Luz: ");
+  display.print(luz);
+  
+  // Aviso visual de alarme
+  if (luz > 2000) {
+    display.setCursor(65, 38);
+    display.print("!ALARME!");
+  }
+
+  // Linha 4: Memória
+  display.setCursor(0, 52);
   display.print("Mem:");
   display.print(bufferSize);
-
-  display.setCursor(0, 35);
-  display.print("Vib: ");
-  display.print(vibStatus);
-
-  // Linha 4: Status Final
-  display.setCursor(0, 50);
-  display.print("Sts: ");
-  if (boxStatus == "CRITICO!") {
-    display.setTextColor(SSD1306_BLACK, SSD1306_WHITE);
-  }
+  
+  display.setCursor(60, 52);
+  if (boxStatus == "CRITICO!") display.setTextColor(SSD1306_BLACK, SSD1306_WHITE); 
   display.print(boxStatus);
   display.setTextColor(SSD1306_WHITE);
 
   display.display();
 }
+
 void setup_wifi() {
   delay(10);
-  Serial.println();
-  Serial.print("Tentando conectar WiFi: ");
-  Serial.println(SSID_WIFI);
   WiFi.begin(SSID_WIFI, SENHA_WIFI);
 }
 
@@ -93,17 +153,12 @@ void callback(char* topic, byte* payload, unsigned int length) {
   String message;
   for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
   
-  Serial.print("MENSAGEM RECEBIDA [");
-  Serial.print(topic);
-  Serial.print("]: ");
-  Serial.println(message);
-
   StaticJsonDocument<200> doc;
   DeserializationError error = deserializeJson(doc, message);
 
   if (!error && doc.containsKey("led")) {
     const char* color = doc["led"];
-    if (strcmp(color, "GREEN") == 0) boxStatus = "APROVADO";
+    if (strcmp(color, "GREEN") == 0) boxStatus = "OK";
     else if (strcmp(color, "RED") == 0) boxStatus = "CRITICO!";
     else if (strcmp(color, "YELLOW") == 0) boxStatus = "ALERTA";
   }
@@ -111,35 +166,37 @@ void callback(char* topic, byte* payload, unsigned int length) {
 
 void tryReconnect() {
   if (WiFi.status() == WL_CONNECTED && !client.connected()) {
-    Serial.print("Tentando reconexão MQTT... ");
     if (client.connect(BOX_ID, "vasafe/box_01/status", 1, true, "OFFLINE")) {
-      Serial.println("CONECTADO!");
       client.publish("vasafe/box_01/status", "ONLINE");
       client.subscribe("vasafe/box_01/comando");
-    } else {
-      Serial.print("Falha. Estado: ");
-      Serial.println(client.state());
     }
   }
 }
+
 void setup() {
   Serial.begin(115200);
-  Serial.println("\n=== INICIANDO SISTEMA VASAFE ===");
 
-  pinMode(PIN_BTN, INPUT_PULLUP);
-  pinMode(PIN_LDR, INPUT);
+  // Configuração Pinos RGB e Buzzer
+  pinMode(PIN_RGB_R, OUTPUT);
+  pinMode(PIN_RGB_G, OUTPUT);
+  pinMode(PIN_RGB_B, OUTPUT);
+  pinMode(PIN_BUZZER, OUTPUT);
+  
+  // Teste de Cores Inicial (RGB) e Buzzer
+  setRGB(1, 0, 0); delay(200); // Vermelho
+  setRGB(0, 1, 0); delay(200); // Verde
+  setRGB(0, 0, 1); delay(200); // Azul
+  setRGB(0, 0, 0); // Desliga
+  
+  // Apito curto de teste
+  digitalWrite(PIN_BUZZER, HIGH); delay(100); digitalWrite(PIN_BUZZER, LOW);
 
   Wire.begin(21, 22);
-
   if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
-    Serial.println("ERRO CRÍTICO: OLED não encontrado!");
-    // Não trava, tenta seguir
+    Serial.println("FALHA NO OLED");
   } else {
-    Serial.println("OLED Iniciado OK");
     display.clearDisplay();
-    display.setTextSize(1);
     display.setTextColor(SSD1306_WHITE);
-    display.setCursor(0,0);
     display.println("Iniciando...");
     display.display();
   }
@@ -151,86 +208,59 @@ void setup() {
 }
 
 void loop() {
-  if (WiFi.status() != WL_CONNECTED) {
-    // WiFi caindo...
-  } else {
-    if (!client.connected()) tryReconnect();
+  if (WiFi.status() == WL_CONNECTED && !client.connected()) {
+    tryReconnect();
   }
-
   client.loop();
 
-  int reading = digitalRead(PIN_BTN);
-  if (reading == LOW && lastButtonState == HIGH) {
-    buttonPressCount++;
-    Serial.println("Botão Pressionado!"); // Debug Botão
-    delay(50);
-  }
-  lastButtonState = reading;
-
   unsigned long now = millis();
+  
+  // --- LEITURA INSTANTÂNEA PARA RGB E BUZZER ---
+  float checkTemp = dht.readTemperature();
+  int checkLuz = analogRead(PIN_LDR); // Leitura para o alarme
+  
+  bool sensorError = isnan(checkTemp);
+  bool isOnline = client.connected();
+
+  // Controla cor do LED e Som do Buzzer
+  atualizarHardware(isOnline, sensorError, checkLuz);
+
+  // --- LOOP DE ENVIO (2 segundos) ---
   if (now - lastMsg > 2000) {
     lastMsg = now;
 
-    Serial.println("\n--- LEITURA DE SENSORES ---");
-    
-    // 1. Temperatura
     float temp = dht.readTemperature();
-    Serial.print("DHT Temp: ");
-    if (isnan(temp)) {
-      Serial.println("ERRO (NaN) - Verifique fio no Pino 15!");
-      temp = 0.0;
-    } else {
-      Serial.print(temp);
-      Serial.println(" °C");
-    }
-
-    // 2. Luz
     int luz = analogRead(PIN_LDR);
-    Serial.print("LDR Luz (0-4095): ");
-    Serial.print(luz);
-    if(luz == 0 || luz == 4095) Serial.print(" <- ALERTA: Pode precisar calibrar parafuso!");
-    Serial.println();
 
-    String vibLevel = (buttonPressCount >= 2) ? "ALTA" : "BAIXA";
-    buttonPressCount = 0;
-    Serial.print("Vibração detectada: ");
-    Serial.println(vibLevel);
+    if (isnan(temp)) temp = 0.0; 
 
     StaticJsonDocument<256> doc;
     doc["box_id"] = BOX_ID;
     doc["temp"] = temp;
-    doc["vib"] = (vibLevel == "ALTA") ? "HIGH" : "LOW";
     doc["luz"] = luz;
 
     char buffer[256];
     serializeJson(doc, buffer);
     String jsonString = String(buffer);
 
-    if (client.connected()) {
-      Serial.print("Enviando MQTT: ");
-      Serial.println(jsonString);
+    // Lógica de Envio / Buffer
+    if (isOnline && !sensorError) {
       client.publish("vasafe/box_01/telemetria", buffer);
-
-      if (offlineBuffer.size() > 0) {
-        Serial.print("Sincronizando Buffer... ");
-        for (size_t i = 0; i < offlineBuffer.size(); i++) {
-          client.publish("vasafe/box_01/telemetria", offlineBuffer[i].c_str());
-          delay(50);
-        }
-        offlineBuffer.clear();
-        Serial.println("OK!");
-      }
-
-    } else {
-      Serial.println("WiFi/MQTT Offline. Salvando no Buffer.");
-      if ((int)offlineBuffer.size() < MAX_BUFFER_SIZE) {
-        offlineBuffer.push_back(jsonString);
-      } else {
+      while (offlineBuffer.size() > 0) {
+        client.publish("vasafe/box_01/telemetria", offlineBuffer[0].c_str());
         offlineBuffer.erase(offlineBuffer.begin());
-        offlineBuffer.push_back(jsonString);
+        delay(50);
+      }
+    } else {
+      if (!sensorError) {
+         if ((int)offlineBuffer.size() < MAX_BUFFER_SIZE) {
+           offlineBuffer.push_back(jsonString);
+         } else {
+           offlineBuffer.erase(offlineBuffer.begin());
+           offlineBuffer.push_back(jsonString);
+         }
       }
     }
-
-    drawScreen(temp, vibLevel, offlineBuffer.size(), client.connected());
+    drawScreen(temp, luz, offlineBuffer.size(), isOnline, sensorError);
   }
 }

@@ -6,10 +6,11 @@ import LoginScreen from './components/LoginScreen';
 import DashboardScreen from './components/DashboardScreen';
 import DetailScreen from './components/DetailScreen';
 
+// IMPORTANTE: O ID aqui deve ser IGUAL ao definido no ESP32 (box_01)
 const ESTOQUE_CONFIG = [
-  { id: 'Lote-A', nome: 'Caixa 01 - Pfizer', conteudo: 'Vacinas COVID', local: 'Expedição A' },
-  { id: 'Lote-B', nome: 'Caixa 02 - Insulina', conteudo: 'Insulina NPH', local: 'Estoque Frio' },
-  { id: 'Lote-C', nome: 'Caixa 03 - Amostras', conteudo: 'Sangue Total', local: 'Triagem' },
+  { id: 'box_01', nome: 'Caixa 01 - Vacinas', conteudo: 'Pfizer COVID', local: 'Expedição A' },
+  { id: 'box_02', nome: 'Caixa 02 - Insulina', conteudo: 'Insulina NPH', local: 'Estoque Frio' },
+  { id: 'box_03', nome: 'Caixa 03 - Amostras', conteudo: 'Sangue Total', local: 'Triagem' },
 ];
 
 function App() {
