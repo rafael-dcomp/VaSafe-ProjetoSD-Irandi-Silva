@@ -65,7 +65,6 @@ def calcular_saude_lote(historico):
     dado_atual = historico[0]
     
     # 1. Checagem de Fraude/Violação (Prioridade Máxima -> Preto)
-    # Verifica se a flag de violação veio do sensor ou se foi calculada anteriormente
     if dado_atual.get("violacao"): 
         return 0, "FRAUDE", "#000000", "Violação detectada pelo Sensor!"
 
@@ -84,7 +83,7 @@ def calcular_saude_lote(historico):
     # Limites (0 a 100)
     saude = max(0, min(saude, 100))
 
-    # 3. Definição do Status Visual e Cores para o Dashboard
+    # 3. Definição do Status Visual
     if dado_atual.get("violacao"):
          return 0, "FRAUDE", "#000000", "Violação Crítica!"
     elif dado_atual["tampa_aberta"]:
@@ -96,7 +95,7 @@ def calcular_saude_lote(historico):
     else:
         return saude, "APROVADO", "#22c55e", "Condições ideais."
 
-# --- CALLBACKS MQTT (AQUI ESTÁ A CORREÇÃO PRINCIPAL) ---
+# --- CALLBACKS MQTT (AQUI ESTÁ A LÓGICA CORRIGIDA) ---
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ MQTT conectado com sucesso!")
@@ -106,44 +105,45 @@ def on_connect(client, userdata, flags, rc):
 
 def on_message(client, userdata, msg):
     try:
-        # 1. Pega a string bruta
-        raw_msg = msg.payload.decode().strip()
+        # 1. Pega a mensagem bruta e decodifica ignorando erros de caracteres estranhos
+        raw_msg = msg.payload.decode("utf-8", errors="ignore").strip()
         
-        # 2. FILTRAGEM DE LOGS DO SISTEMA
-        # Se for mensagem de log (ex: ">>> DESLIGANDO WIFI"), a gente ignora e não tenta ler JSON
-        if ">>>" in raw_msg or "DESLIGANDO" in raw_msg:
-            # print(f"ℹ️ Log de sistema ignorado: {raw_msg}") 
-            return
+        # 2. LOG DE DEBUG (Para você ver o que está chegando)
+        print(f"📩 [RAW] Chegou: {raw_msg}")
 
-        # 3. LIMPEZA DA STRING
-        # Remove os prefixos que o ESP manda
-        clean_msg = raw_msg.replace("[BUFFER]", "").replace("Upload:", "").strip()
+        # 3. EXTRAÇÃO CIRÚRGICA DO JSON
+        # Ignora "Upload:", "[BUFFER]", datas, etc. Busca apenas o conteúdo entre { e }
+        idx_inicio = raw_msg.find('{')
+        idx_fim = raw_msg.rfind('}')
 
-        # 4. EXTRAÇÃO DO JSON PURO
-        # Procura onde começa '{' e onde termina '}' para ignorar qualquer lixo ao redor
-        idx_inicio = clean_msg.find('{')
-        idx_fim = clean_msg.rfind('}')
-        
-        if idx_inicio != -1 and idx_fim != -1:
-            clean_msg = clean_msg[idx_inicio : idx_fim + 1]
-        else:
-            # Se não tiver chaves {}, não é um dado válido
+        if idx_inicio == -1 or idx_fim == -1:
+            # Não é um JSON (pode ser log de sistema ">>> CONNECTING...")
             return 
 
-        # 5. CONVERSÃO PARA JSON
-        payload = json.loads(clean_msg)
-        print(f"📥 [MQTT] ID: {payload.get('box_id')} | Temp: {payload.get('temperatura')} | Bat: {payload.get('bateria')}")
+        json_limpo = raw_msg[idx_inicio : idx_fim + 1]
 
-        # Extração segura dos dados
-        box_id = payload.get("box_id", "unknown")
-        temperatura = float(payload.get("temperatura", 0))
-        tampa_aberta = bool(payload.get("aberta", False))
+        # 4. CONVERSÃO
+        payload = json.loads(json_limpo)
+        
+        # 5. MAPEAMENTO DE DADOS
+        box_id = payload.get("box_id")
+        
+        if not box_id:
+            print("⚠️ JSON sem 'box_id' ignorado.")
+            return
+
+        temperatura = float(payload.get("temperatura", 0.0))
+        # O sensor manda 'aberta', mas o Influx espera 'tampa_aberta'
+        tampa_aberta = bool(payload.get("aberta", False)) 
         luz = int(payload.get("luz", 0))
         bateria = int(payload.get("bateria", 0))
         
-        # Define violação (pode vir no JSON como 'alerta' ou calculamos aqui)
-        alerta = payload.get("alerta", "")
-        violacao = (alerta == "EVENTO_CRITICO")
+        # Lógica de Violação
+        violacao = False
+        if "alerta" in payload:
+            violacao = (payload["alerta"] == "EVENTO_CRITICO")
+
+        print(f"✅ [PROCESSADO] ID: {box_id} | Temp: {temperatura} | Tampa: {tampa_aberta}")
 
         # 6. GRAVAÇÃO NO INFLUXDB
         point = (
@@ -160,9 +160,9 @@ def on_message(client, userdata, msg):
         write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
 
     except json.JSONDecodeError:
-        print(f"❌ Erro JSON. Recebido: {msg.payload.decode()}")
+        print(f"❌ Erro de JSON na string: {raw_msg}")
     except Exception as e:
-        print(f"❌ Erro processamento: {e}")
+        print(f"❌ Erro ao processar mensagem: {e}")
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
@@ -185,7 +185,7 @@ def startup():
 
 @app.get("/analise/{lote}")
 def analise_lote(lote: str):
-    # Query: Busca dados, incluindo Luz e Bateria
+    # Query: Busca dados recentes
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
       |> range(start: -24h)
@@ -202,7 +202,6 @@ def analise_lote(lote: str):
         
         for table in result:
             for r in table.records:
-                # Usa .get() para evitar erro se o campo não existir em registros antigos
                 historico.append({
                     "time": r.get_time(),
                     "temperatura": float(r.get("temperatura", 0)),
@@ -217,7 +216,7 @@ def analise_lote(lote: str):
              return {
                 "lote": lote,
                 "analise_risco": {
-                    "health_score": None, # Null faz o front ficar Cinza
+                    "health_score": None, 
                     "status_operacional": "OFFLINE", 
                     "indicador_led": "#cbd5e1", 
                     "recomendacao": "Sem sinal do dispositivo."
