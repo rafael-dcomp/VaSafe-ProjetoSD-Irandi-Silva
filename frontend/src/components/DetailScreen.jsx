@@ -20,6 +20,7 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
       setLastUpdate(new Date().toLocaleTimeString());
     } catch (e) { 
       console.error("Erro ao detalhar caixa:", e);
+      // Se der erro, não faz nada para manter o último estado ou o loading
     }
   }, [caixaId]);
 
@@ -38,13 +39,16 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
     );
   }
 
-  // --- LÓGICA DE SEGURANÇA ---
-  const isViolado = analise.telemetria.violacao; // Vem da API/ESP32
-  const isAberta = analise.telemetria.tampa_aberta; // Vem da API/ESP32
+  // --- LÓGICA DE SEGURANÇA E DADOS ---
+  const { telemetria, analise_risco } = analise;
+  const isViolado = telemetria.violacao; 
+  const isAberta = telemetria.tampa_aberta;
+  const isOffline = analise_risco.health_score === null;
 
   // Define a cor da borda/fundo baseado no perigo
   let containerClass = "";
-  if (isViolado) containerClass = "alert-violation";
+  if (isOffline) containerClass = "alert-offline"; // Classe CSS opcional para cinza
+  else if (isViolado) containerClass = "alert-violation";
   else if (isAberta) containerClass = "alert-open";
 
   return (
@@ -59,28 +63,28 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
       </div>
 
       <div className="header-detail">
-        <h2 style={{color: isViolado ? 'red' : '#334155'}}>
-            {isViolado ? "⚠️ CAIXA VIOLADA ⚠️" : `Analítica: ${caixaNome}`}
+        <h2 style={{color: isViolado ? '#ef4444' : (isOffline ? '#64748b' : '#334155')}}>
+            {isOffline ? `OFFLINE: ${caixaNome}` : (isViolado ? "⚠️ CAIXA VIOLADA ⚠️" : `Analítica: ${caixaNome}`)}
         </h2>
-        {isAberta && !isViolado && <span className="tag-aberta">TAMPA ABERTA</span>}
+        {isAberta && !isViolado && !isOffline && <span className="tag-aberta">TAMPA ABERTA</span>}
       </div>
 
       <StatusBadge 
-        status={analise.analise_risco.status_operacional} 
-        cor={analise.analise_risco.indicador_led} 
-        recomendacao={analise.analise_risco.recomendacao} 
+        status={analise_risco.status_operacional} 
+        cor={analise_risco.indicador_led} 
+        recomendacao={analise_risco.recomendacao} 
       />
 
       <div className="stats-grid">
         <StatCard 
           titulo="Saúde da Caixa" 
-          valor={analise.analise_risco.health_score} 
-          unidade="%" 
-          cor={analise.analise_risco.health_score < 60 ? '#ef4444' : '#16a34a'} 
+          valor={isOffline ? "--" : analise_risco.health_score} 
+          unidade={isOffline ? "" : "%"} 
+          cor={analise_risco.health_score < 60 ? '#ef4444' : '#16a34a'} 
         />
         <StatCard 
           titulo="Temperatura" 
-          valor={analise.telemetria.temperatura_atual} 
+          valor={telemetria.temperatura_atual} 
           unidade="°C" 
           cor="#2563eb"
         />
@@ -90,12 +94,13 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
           unidade="" 
           cor={isViolado ? '#ef4444' : (isAberta ? '#eab308' : '#22c55e')} 
         />
-        {/* Usamos Bateria caso venha da API, senão placeholder */}
+        
+        {/* CORRIGIDO: Agora lê 'bateria' direto da telemetria e trata offline */}
         <StatCard 
           titulo="Bateria" 
-          valor={analise.telemetria.bateria_atual || "--"} 
+          valor={telemetria.bateria !== undefined ? telemetria.bateria : "--"} 
           unidade="%" 
-          cor="#8b5cf6" 
+          cor={telemetria.bateria < 20 ? '#ef4444' : '#8b5cf6'} 
         />
       </div>
 
@@ -103,8 +108,9 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
         <h3>Histórico em Tempo Real</h3>
         <div className="chart-container">
           <ResponsiveContainer width="100%" height="100%">
-            <LineChart data={analise.telemetria.historico.map(d => ({
+            <LineChart data={telemetria.historico.map(d => ({
                 ...d, 
+                // Formata hora
                 time: new Date(d.time).toLocaleTimeString([], {hour: '2-digit', minute:'2-digit', second:'2-digit'})
               })).reverse()}>
               
@@ -122,9 +128,10 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
                 dot={false} 
                 name="Temp (°C)" 
               />
+              {/* CORRIGIDO: dataKey deve ser 'tampa_aberta' conforme API */}
               <Line 
                 type="step" 
-                dataKey="aberta" 
+                dataKey="tampa_aberta" 
                 stroke="#eab308" 
                 strokeWidth={2} 
                 dot={false} 
