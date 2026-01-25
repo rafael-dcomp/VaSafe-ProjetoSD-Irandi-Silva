@@ -7,7 +7,7 @@ import StatusBadge from './StatusBadge';
 import StatCard from './StatCard';
 
 // Importe seu arquivo CSS aqui
-import './DetailScreen.css'; 
+import './App.css'; 
 
 const API_URL = "http://98.88.32.2:8000";
 
