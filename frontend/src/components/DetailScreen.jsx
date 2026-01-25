@@ -6,7 +6,7 @@ import {
 import StatusBadge from './StatusBadge';
 import StatCard from './StatCard';
 
-const API_URL = "http://localhost:8000";
+const API_URL = "http://54.197.203.94:8000";
 
 export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
   const [analise, setAnalise] = useState(null);

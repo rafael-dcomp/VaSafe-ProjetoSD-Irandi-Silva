@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 
-const API_URL = "http://localhost:8000";
+const API_URL = "http://54.197.203.94:8000";
 
 const getStatusColor = (score) => {
   if (score === undefined || score === null) return '#cbd5e1'; 

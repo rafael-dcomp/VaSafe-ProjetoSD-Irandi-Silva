@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import axios from 'axios';
 
-const API_URL = "http://localhost:8000";
+const API_URL = "http://54.197.203.94:8000";
 
 export default function LoginScreen({ onLoginSuccess }) {
   const [user, setUser] = useState(""); 
