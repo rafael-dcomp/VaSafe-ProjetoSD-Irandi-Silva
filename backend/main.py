@@ -19,7 +19,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configurações de Ambiente
+# --- CONFIGURAÇÕES DE AMBIENTE ---
 MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
@@ -28,18 +28,18 @@ INFLUX_ORG = os.getenv("INFLUX_ORG", "ufsvasafe")
 INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "telemetria")
 USERS_FILE = "users.json"
 
-# Setup InfluxDB
+# --- SETUP INFLUXDB ---
 influx_client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG, timeout=20000)
 write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 query_api = influx_client.query_api()
 
-# Setup MQTT
+# --- SETUP MQTT ---
 mqtt_client = mqtt.Client(client_id="vasafe-backend", protocol=mqtt.MQTTv311)
 
-# Funções Auxiliares de Usuário (Simples baseada em arquivo)
+# --- FUNÇÕES DE USUÁRIO ---
 def load_users():
     if not os.path.exists(USERS_FILE):
-        return {"admin": "admin"} # Usuário padrão
+        return {"admin": "admin"} 
     try:
         with open(USERS_FILE, 'r') as f:
             return json.load(f)
@@ -55,39 +55,47 @@ def save_new_user(usuario, senha):
         json.dump(users, f)
     return True
 
-# Lógica de Saúde do Lote
+# --- LÓGICA DE SAÚDE (CORRIGIDA) ---
 def calcular_saude_lote(historico):
     if not historico:
         return 0, "AGUARDANDO", "#808080", "Aguardando dados..."
 
+    # Pega o dado mais recente para determinar o estado ATUAL
+    dado_atual = historico[0]
+    
+    # Se o ESP32 enviou alerta crítico, respeitamos imediatamente
+    if dado_atual["violacao"]: 
+        return 0, "FRAUDE", "#ef4444", "Violação detectada pelo Sensor!"
+
+    # Lógica de decaimento de saúde baseada em histórico (sem zerar tudo por falso positivo)
     saude = 100.0
-    violacao_detectada = False
+    
+    # Penaliza saúde apenas se houve violações passadas, mas não condena o status atual se já normalizou
+    violacoes_passadas = sum(1 for p in historico if p["violacao"])
+    if violacoes_passadas > 0:
+        saude -= (violacoes_passadas * 5) # Perde 5% de confiança por cada alerta passado
 
-    for p in historico:
-        temp = p["temperatura"]
-        aberta = p["tampa_aberta"]
-
-        if temp > 8 or temp < 2:
-            saude -= 20
-        if aberta:
-            saude -= 5
-        if p["violacao"]:
-            violacao_detectada = True
-            saude = 0
-            break
+    # Verifica temperatura do momento atual para status operacional
+    temp = dado_atual["temperatura"]
+    
+    # Limites para saúde (apenas penaliza, não zera se não for crítico)
+    if temp > 8 or temp < 2:
+        saude -= 10 
 
     saude = max(saude, 0)
+    saude = min(saude, 100)
 
-    if violacao_detectada:
-        return saude, "FRAUDE", "#000000", "Violação detectada!"
-    elif saude >= 90:
-        return saude, "APROVADO", "#22c55e", "Carga segura."
-    elif saude >= 60:
-        return saude, "ALERTA", "#eab308", "Monitorar condições."
+    # Definição do Status Visual
+    if dado_atual["tampa_aberta"]:
+        return saude, "ALERTA", "#eab308", "Tampa Aberta!"
+    elif saude < 50:
+         return saude, "RISCO", "#f97316", "Muitas oscilações recentes."
+    elif temp > 7 or temp < 3:
+        return saude, "ATENÇÃO", "#eab308", "Temperatura próxima do limite."
     else:
-        return saude, "CRITICO", "#ef4444", "Risco biológico!"
+        return saude, "APROVADO", "#22c55e", "Condições ideais."
 
-# Callbacks MQTT
+# --- CALLBACKS MQTT (CORRIGIDO) ---
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ MQTT conectado")
@@ -98,19 +106,26 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
-        print("📥 MQTT:", payload)
+        print(f"📥 MQTT Recebido: {payload}")
 
         box_id = payload.get("box_id", "unknown")
         temperatura = float(payload.get("temperatura", 0))
         tampa_aberta = bool(payload.get("aberta", False))
-        violacao = temperatura > 8 or temperatura < 2
+        luz = int(payload.get("luz", 0))
+        bateria = int(payload.get("bateria", 0)) # Lê a bateria enviada pelo ESP
+        
+        # LÓGICA CORRIGIDA: Só é violação se o ESP mandar o alerta explícito
+        alerta_recebido = payload.get("alerta", "")
+        violacao = (alerta_recebido == "EVENTO_CRITICO")
 
         point = (
             Point("telemetria")
             .tag("lote", box_id)
             .field("temperatura", temperatura)
+            .field("luz", luz)
+            .field("bateria", bateria)
             .field("tampa_aberta", tampa_aberta)
-            .field("violacao", violacao)
+            .field("violacao", violacao) # Grava o que o ESP decidiu
             .time(datetime.utcnow())
         )
 
@@ -127,7 +142,8 @@ def iniciar_mqtt():
         try:
             mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
             mqtt_client.loop_forever()
-        except Exception:
+        except Exception as e:
+            print(f"⚠️ Erro conexão MQTT: {e}. Tentando em 5s...")
             time.sleep(5)
 
 @app.on_event("startup")
@@ -163,6 +179,7 @@ def login(dados: dict):
 
 @app.get("/analise/{lote}")
 def analise_lote(lote: str):
+    # Busca dados ordenados por tempo (decrescente)
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
       |> range(start: -24h)
@@ -180,26 +197,44 @@ def analise_lote(lote: str):
             for r in table.records:
                 historico.append({
                     "time": r.get_time(),
-                    "temperatura": float(r["temperatura"]),
-                    "tampa_aberta": bool(r["tampa_aberta"]),
-                    "violacao": bool(r["violacao"])
+                    "temperatura": float(r.get("temperatura", 0)),
+                    "tampa_aberta": bool(r.get("tampa_aberta", False)),
+                    "violacao": bool(r.get("violacao", False)),
+                    "bateria": int(r.get("bateria", 0)),
+                    "luz": int(r.get("luz", 0))
                 })
 
-        temperatura_atual = historico[0]["temperatura"] if historico else 0.0
+        # Se não tem dados
+        if not historico:
+             return {
+                "lote": lote,
+                "analise_risco": {
+                    "health_score": 0, "status_operacional": "AGUARDANDO", 
+                    "indicador_led": "#808080", "recomendacao": "Aguardando conexão..."
+                },
+                "telemetria": {"temperatura_atual": 0, "bateria": 0, "historico": []}
+            }
+
+        # Calcula saúde baseado nos dados reais
         saude, status, cor, msg = calcular_saude_lote(historico)
+        
+        # Pega dados mais recentes
+        recente = historico[0]
 
         return {
             "lote": lote,
             "analise_risco": {
-                "health_score": saude,
+                "health_score": int(saude),
                 "status_operacional": status,
                 "indicador_led": cor,
                 "recomendacao": msg
             },
             "telemetria": {
-                "temperatura_atual": round(temperatura_atual, 1),
-                "violacao": historico[0]["violacao"] if historico else False,
-                "tampa_aberta": historico[0]["tampa_aberta"] if historico else False,
+                "temperatura_atual": round(recente["temperatura"], 1),
+                "violacao": recente["violacao"],
+                "tampa_aberta": recente["tampa_aberta"],
+                "bateria": recente["bateria"],
+                "luz": recente["luz"],
                 "historico": historico
             }
         }
@@ -210,7 +245,7 @@ def analise_lote(lote: str):
             "lote": lote,
             "analise_risco": {
                 "health_score": 0, "status_operacional": "OFFLINE", 
-                "indicador_led": "#808080", "recomendacao": "Erro interno"
+                "indicador_led": "#808080", "recomendacao": "Erro interno no servidor"
             },
-            "telemetria": {"temperatura_atual": 0, "historico": []}
+            "telemetria": {"temperatura_atual": 0, "bateria": 0, "historico": []}
         }
