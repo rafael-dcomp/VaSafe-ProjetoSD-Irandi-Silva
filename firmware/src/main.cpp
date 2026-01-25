@@ -7,23 +7,24 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <vector>
-#include <WiFiManager.h> // <--- BIBLIOTECA PARA PORTAL DE CONFIGURAÇÃO
-#include <Preferences.h> // <--- PARA SALVAR DADOS NA MEMÓRIA
+#include <WiFiManager.h> 
+#include <Preferences.h> 
 
 // --- DEFINIÇÕES DE HARDWARE ---
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
-#define PIN_DHT        15  // Sensor Temperatura
-#define PIN_LDR        34  // Sensor Luz 
-#define PIN_BUZZER     4   // Buzzer
-#define PIN_RGB_R      19  // Vermelho
-#define PIN_RGB_G      18  // Verde
-#define PIN_RGB_B      5   // Azul
-#define PIN_CONFIG_BTN 0   // Botão BOOT (Agora usado no LOOP)
+#define PIN_DHT        15  
+#define PIN_LDR        34   
+#define PIN_BUZZER     4   
+#define PIN_RGB_R      19  
+#define PIN_RGB_G      18  
+#define PIN_RGB_B      5   
+#define PIN_CONFIG_BTN 0   
 
 // --- CONSTANTES DO SISTEMA ---
-const int CAPACIDADE_MEMORIA_MENSAGENS = 400; 
-const int LIMITE_LUZ_ALARME = 600; 
+const int CAPACIDADE_MEMORIA_MENSAGENS = 400; // Total de slots na memória RAM
+const int LIMITE_LUZ_ALARME = 600;            // Abaixo disso = Caixa Aberta
+const float LIMITE_VARIACAO_TEMP = 2.0;       // Variação brusca de temperatura
 
 // --- OBJETOS GLOBAIS ---
 WiFiClient espClient;
@@ -32,12 +33,14 @@ DHT dht(PIN_DHT, DHT11);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Preferences preferences; 
 
-// --- VARIÁVEIS DE CONFIGURAÇÃO (Valores padrão) ---
+// --- VARIÁVEIS DE CONFIGURAÇÃO ---
 char mqtt_server[40] = "0.0.0.0";
 char mqtt_port[6] = "1883";
 char box_id[15] = "box_01";
-char config_intervalo[6] = "0"; // 0 = Automático
-char config_duracao[6] = "3";   // 3 horas padrão
+
+// Configurações de Tempo
+char config_duracao[6] = "3";      // Duração da viagem (Horas) -> Define a MEDIÇÃO
+char config_sync_min[6] = "5";    // Período de Sync (Minutos) -> Define o ENVIO
 
 // --- VARIÁVEIS DE OPERAÇÃO ---
 const char* TOPIC_TELEMETRIA_BASE = "vasafe/";
@@ -45,21 +48,40 @@ const char* TOPIC_COMANDO_BASE    = "vasafe/";
 String topicTelemetria;
 String topicComando;
 
-std::vector<String> offlineBuffer;
-unsigned long lastMsg = 0;
-unsigned long intervaloEnvioReal = 60000; 
+std::vector<String> offlineBuffer;   
+
+// Timers
+unsigned long lastMedicao = 0;       // Timer para salvar na memória
+unsigned long lastSync = 0;          // Timer para ligar o WiFi e enviar
+unsigned long lastMsgEmergencia = 0; 
+
+// Intervalos Calculados
+unsigned long intervaloMedicaoReal = 0;      // Calculado (Duração / Memoria)
+unsigned long intervaloSincronizacaoReal = 0; // Configurado pelo usuário
+
 String boxStatus = "AGUARDANDO"; 
+
+// --- CONTROLE DE COMANDO REMOTO ---
+bool forcarSincronizacao = false; 
+
+// --- CONTROLE DE ENERGIA E ESTADOS ---
+bool wifiLigado = true;
+unsigned long lastConnectionTime = 0;
+float ultimaTempEnviada = -999.0;
+bool modoEmergencia = false; 
+
+// --- TIMER DE LEITURA RÁPIDA (VISUALIZAÇÃO) ---
+unsigned long lastSensorRead = 0;     
+const int INTERVALO_LEITURA_TELA = 1000; 
 
 unsigned long previousMillisBlink = 0;
 bool ledState = LOW;
 bool shouldSaveConfig = false;
-
-// Variável para controlar o botão de reset no loop
 unsigned long btnPressStart = 0;
 
 // --- CALLBACK WIFI MANAGER ---
 void saveConfigCallback () {
-  Serial.println("Alterações detectadas. Salvando...");
+  Serial.println("Alterações detectadas no Portal. Salvando...");
   shouldSaveConfig = true;
 }
 
@@ -70,29 +92,18 @@ void setRGB(int r, int g, int b) {
   digitalWrite(PIN_RGB_B, b);
 }
 
-void desenharTelaConfig() {
-  display.clearDisplay();
-  display.setTextColor(SSD1306_WHITE);
-  display.setTextSize(1);
-  display.setCursor(0, 0);
-  display.println("MODO CONFIGURACAO");
-  display.println("-----------------");
-  display.println("Conecte no WiFi:");
-  display.setTextSize(2);
-  display.println("VaSafe-CFG");
-  display.setTextSize(1);
-  display.println("IP: 192.168.4.1");
-  display.display();
-}
-
-void drawScreen(float temp, int luz, int bufferSize, bool online, bool erro) {
+void drawScreen(float temp, int luz, int bufferSize, bool wifiOn, bool erro) {
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
   display.setTextSize(1);
   display.setCursor(0, 0);
   if (erro) display.print("ERRO SENSOR");
-  else if (online) display.print("MONITORAMENTO ON");
+  else if (wifiOn) {
+      if (forcarSincronizacao) display.print("CMD: SYNC...");
+      else if (bufferSize > 0) display.print("ENVIANDO DADOS..."); 
+      else display.print("ONLINE - AGUARDANDO");
+  }
   else display.print("OFFLINE (Buf: " + String(bufferSize) + ")");
 
   display.setCursor(0, 15);
@@ -106,7 +117,7 @@ void drawScreen(float temp, int luz, int bufferSize, bool online, bool erro) {
   
   if (luz < LIMITE_LUZ_ALARME) {
     display.setCursor(70, 38);
-    display.print("!ABERTO!"); 
+    display.print("!VIOLADO!"); 
   }
 
   display.setCursor(0, 54);
@@ -117,6 +128,7 @@ void drawScreen(float temp, int luz, int bufferSize, bool online, bool erro) {
   display.display();
 }
 
+// --- CALLBACK MQTT ---
 void callback(char* topic, byte* payload, unsigned int length) {
   String message;
   for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
@@ -127,26 +139,25 @@ void callback(char* topic, byte* payload, unsigned int length) {
   if (!error) {
     if (doc.containsKey("status_operacional")) {
         boxStatus = doc["status_operacional"].as<String>();
+        Serial.print("Status recebido: "); Serial.println(boxStatus);
     } 
-    else if (doc.containsKey("led")) {
-       String led = doc["led"].as<String>();
-       if(led == "RED") boxStatus = "CRITICO!";
-       else if(led == "YELLOW") boxStatus = "ALERTA";
-       else boxStatus = "OK";
+    
+    if (doc.containsKey("comando")) {
+        String cmd = doc["comando"].as<String>();
+        if (cmd == "SYNC") {
+            Serial.println("!!! COMANDO REMOTO DE SYNC !!!");
+            forcarSincronizacao = true; 
+        }
     }
   }
 }
 
 void atualizarHardware(bool online, bool erroSensor, int luz) {
   unsigned long currentMillis = millis();
-  
   bool caixaAberta = (luz < LIMITE_LUZ_ALARME); 
 
-  if (caixaAberta) { 
-    digitalWrite(PIN_BUZZER, HIGH);
-  } else {
-    digitalWrite(PIN_BUZZER, LOW);  
-  }
+  if (caixaAberta) digitalWrite(PIN_BUZZER, HIGH);
+  else digitalWrite(PIN_BUZZER, LOW);  
 
   if (erroSensor) {
     if (currentMillis - previousMillisBlink >= 200) {
@@ -156,59 +167,72 @@ void atualizarHardware(bool online, bool erroSensor, int luz) {
     }
   }
   else if (online) {
-    if (boxStatus == "CRITICO!" || boxStatus == "FRAUDE") {
-        setRGB(1, 0, 0);
-    } else if (boxStatus == "ALERTA" || boxStatus == "ALERTA_LUZ") {
-        setRGB(1, 1, 0); 
+    if (forcarSincronizacao) {
+        if ((currentMillis / 100) % 2 == 0) setRGB(0, 1, 0);
+        else setRGB(0, 0, 0);
     } else {
-        setRGB(0, 1, 0); 
+        setRGB(0, 1, 0); // Verde sólido = WiFi Ligado
     }
   }
   else {
-    setRGB(0, 0, 1); 
+    setRGB(0, 0, 0); // Led Apagado = Economia (Gravando na memória)
   }
 }
 
-void tryReconnect() {
-  if (WiFi.status() == WL_CONNECTED && !client.connected()) {
-    if (client.connect(box_id)) {
-      client.subscribe(topicComando.c_str()); 
-    }
-  }
-}
-
-// --- FUNÇÃO DE RESET SEGURO ---
 void checkResetButton() {
-  // O botão BOOT (GPIO 0) é LOW quando pressionado
   if (digitalRead(PIN_CONFIG_BTN) == LOW) {
-    // Se começou a apertar agora
-    if (btnPressStart == 0) {
-       btnPressStart = millis();
-    }
-    // Se já está segurando há mais de 3 segundos (3000ms)
+    if (btnPressStart == 0) btnPressStart = millis();
     if (millis() - btnPressStart > 3000) {
-       Serial.println("Botão Segurado: Resetando Configurações...");
-       
        display.clearDisplay();
-       display.setCursor(0,20);
        display.setTextSize(2);
-       display.println("RESETANDO");
-       display.println(" WIFI...");
+       display.setCursor(0,20);
+       display.println("RESETANDO...");
        display.display();
-       
        WiFiManager wm;
-       wm.resetSettings(); // Apaga as configurações salvas
+       wm.resetSettings(); 
        delay(1000);
-       ESP.restart(); // Reinicia a placa (vai voltar no modo AP)
+       ESP.restart(); 
     }
   } else {
-    // Se soltou o botão, zera o contador
     btnPressStart = 0;
+  }
+}
+
+// --- GERENCIADOR DE CONEXÃO INTELIGENTE ---
+// Agora recebe "precisaSincronizar" ao invés de "precisaGravar"
+void gerenciarConexao(bool precisaSincronizar, bool emergencia, bool comandoSync) {
+  
+  // LIGAR WIFI: Apenas se estourou o tempo de sync, é emergência ou comando manual
+  if (precisaSincronizar || emergencia || comandoSync) {
+    if (!wifiLigado) {
+      Serial.println(">>> LIGANDO WIFI (Hora de Sincronizar) <<<");
+      WiFi.mode(WIFI_STA); 
+      WiFi.begin();        
+      wifiLigado = true;
+      lastConnectionTime = millis();
+    }
+    
+    if (WiFi.status() == WL_CONNECTED && !client.connected()) {
+       if (client.connect(box_id)) {
+         client.subscribe(topicComando.c_str());
+       }
+    }
+  } 
+  // DESLIGAR WIFI: Se acabou o buffer e não tem nada urgente
+  else if (wifiLigado && offlineBuffer.empty() && !comandoSync && !emergencia) {
+     if (millis() - lastConnectionTime > 5000) { // 5s de carência
+       Serial.println(">>> DESLIGANDO WIFI (Economia) <<<");
+       client.disconnect();
+       WiFi.disconnect(true);
+       WiFi.mode(WIFI_OFF); 
+       wifiLigado = false;
+     }
   }
 }
 
 void setup() {
   Serial.begin(115200);
+  Serial.println("\n--- INICIANDO VASAFE ---");
 
   pinMode(PIN_RGB_R, OUTPUT);
   pinMode(PIN_RGB_G, OUTPUT);
@@ -218,84 +242,83 @@ void setup() {
   pinMode(PIN_CONFIG_BTN, INPUT_PULLUP);
 
   Wire.begin(21, 22); 
-  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) { 
-    Serial.println(F("Falha no OLED")); 
-  } else {
-    display.clearDisplay();
-    display.display();
-  }
+  if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) Serial.println(F("Falha no OLED")); 
+  else { display.clearDisplay(); display.display(); }
 
   dht.begin();
 
-  // --- CARREGAR DADOS ---
   preferences.begin("vasafe_cfg", false);
   String saved_server = preferences.getString("server", "0.0.0.0");
   String saved_port   = preferences.getString("port", "1883");
   String saved_id     = preferences.getString("boxid", "box_01");
-  String saved_int    = preferences.getString("interval", "0");
   String saved_dur    = preferences.getString("duration", "3");
+  String saved_sync   = preferences.getString("sync_min", "30"); // Padrão: Sync a cada 30 min
 
   saved_server.toCharArray(mqtt_server, 40);
   saved_port.toCharArray(mqtt_port, 6);
   saved_id.toCharArray(box_id, 15);
-  saved_int.toCharArray(config_intervalo, 6);
   saved_dur.toCharArray(config_duracao, 6);
+  saved_sync.toCharArray(config_sync_min, 6);
 
-  // --- WIFIMANAGER ---
   WiFiManager wm;
   wm.setSaveConfigCallback(saveConfigCallback);
 
-  WiFiManagerParameter custom_mqtt_server("server", "IP AWS (Publico)", mqtt_server, 40);
+  WiFiManagerParameter custom_mqtt_server("server", "IP AWS (Broker)", mqtt_server, 40);
   WiFiManagerParameter custom_mqtt_port("port", "Porta MQTT", mqtt_port, 6);
   WiFiManagerParameter custom_box_id("boxid", "ID da Caixa", box_id, 15);
-  WiFiManagerParameter custom_interval("interval", "Intervalo Manual (seg) - 0 p/ Auto", config_intervalo, 6);
+  
+  // NOVOS PARAMETROS PARA A LOGICA SEPARADA
   WiFiManagerParameter custom_duration("duration", "Duracao Viagem (Horas)", config_duracao, 6);
+  WiFiManagerParameter custom_sync("sync", "Sync Periodo (Minutos)", config_sync_min, 6);
 
   wm.addParameter(&custom_mqtt_server);
   wm.addParameter(&custom_mqtt_port);
   wm.addParameter(&custom_box_id);
-  wm.addParameter(&custom_interval);
   wm.addParameter(&custom_duration);
-
-  // REMOVI O CHEQUE DO BOTÃO AQUI NO SETUP PARA EVITAR O MODO DOWNLOAD
+  wm.addParameter(&custom_sync);
 
   wm.setConfigPortalTimeout(180); 
   
-  // Tenta conectar. Se não tiver rede salva, cria o AP VaSafe-Config
   if (!wm.autoConnect("VaSafe-Config")) {
-    Serial.println("Falha na conexao ou timeout. Rodando em modo Offline...");
+    Serial.println("Rodando Offline (Timeout Config)...");
   } else {
-    Serial.println("WiFi Conectado!");
-    
+    Serial.println("WiFi Conectado na Configuração!");
     if (shouldSaveConfig) {
       strcpy(mqtt_server, custom_mqtt_server.getValue());
       strcpy(mqtt_port, custom_mqtt_port.getValue());
       strcpy(box_id, custom_box_id.getValue());
-      strcpy(config_intervalo, custom_interval.getValue());
       strcpy(config_duracao, custom_duration.getValue());
+      strcpy(config_sync_min, custom_sync.getValue());
 
       preferences.putString("server", mqtt_server);
       preferences.putString("port", mqtt_port);
       preferences.putString("boxid", box_id);
-      preferences.putString("interval", config_intervalo);
       preferences.putString("duration", config_duracao);
+      preferences.putString("sync_min", config_sync_min);
     }
   }
 
-  // --- CÁLCULO INTERVALO ---
-  int intervaloManual = atoi(config_intervalo);
+  // --- 1. CÁLCULO DA FREQUÊNCIA DE MEDIÇÃO (GRAVAÇÃO) ---
   float duracaoHoras = atof(config_duracao);
+  if (duracaoHoras <= 0) duracaoHoras = 1; 
+  unsigned long totalSegundos = duracaoHoras * 3600;
+  
+  // Divide o tempo total pela capacidade da memória
+  unsigned long calcIntervalo = totalSegundos / CAPACIDADE_MEMORIA_MENSAGENS;
+  if (calcIntervalo < 10) calcIntervalo = 10; // Mínimo 10s entre medições
+  intervaloMedicaoReal = calcIntervalo * 1000;
 
-  if (intervaloManual > 0) {
-      intervaloEnvioReal = intervaloManual * 1000;
-  } else {
-      if (duracaoHoras <= 0) duracaoHoras = 1; 
-      unsigned long totalSegundosViagem = duracaoHoras * 3600;
-      unsigned long calcIntervalo = totalSegundosViagem / CAPACIDADE_MEMORIA_MENSAGENS;
-      if (calcIntervalo < 10) calcIntervalo = 10; 
-      intervaloEnvioReal = calcIntervalo * 1000;
-      Serial.print("Calculo AUTOMATICO: "); Serial.print(calcIntervalo); Serial.println("s");
-  }
+  // --- 2. CÁLCULO DA FREQUÊNCIA DE SINCRONIZAÇÃO (WIFI) ---
+  int minutosSync = atoi(config_sync_min);
+  if (minutosSync <= 0) minutosSync = 0.10; // Padrão se erro: 10 minutos
+  intervaloSincronizacaoReal = minutosSync * 60000;
+
+  Serial.println("--- CONFIGURACAO APLICADA ---");
+  Serial.print("Duração Viagem: "); Serial.print(duracaoHoras); Serial.println(" h");
+  Serial.print("Memória Disp.: "); Serial.println(CAPACIDADE_MEMORIA_MENSAGENS);
+  Serial.print("-> Intervalo MEDIÇÃO (Gravar): "); Serial.print(intervaloMedicaoReal/1000); Serial.println(" s");
+  Serial.print("-> Intervalo SYNC (WiFi): "); Serial.print(intervaloSincronizacaoReal/60000); Serial.println(" min");
+  Serial.println("-----------------------------");
 
   topicTelemetria = String(TOPIC_TELEMETRIA_BASE) + String(box_id) + "/telemetria";
   topicComando    = String(TOPIC_COMANDO_BASE) + String(box_id) + "/comando";
@@ -307,55 +330,111 @@ void setup() {
 
 void loop() {
   checkResetButton();
-
-  if (WiFi.status() == WL_CONNECTED) {
-    if (!client.connected()) {
-       tryReconnect();
+  
+  // --- LOOP DO WIFI/MQTT ---
+  if (wifiLigado) {
+    client.loop(); 
+    
+    // Se conectou, aproveita e esvazia o buffer
+    if (client.connected() && !offlineBuffer.empty()) {
+       Serial.println("--- [SYNC EM ANDAMENTO] ---");
+       while (!offlineBuffer.empty() && client.connected()) {
+          String msg = offlineBuffer.front(); 
+          Serial.print(">> Upload: "); Serial.println(msg); 
+          
+          client.publish(topicTelemetria.c_str(), msg.c_str());
+          offlineBuffer.erase(offlineBuffer.begin());
+          client.loop(); 
+          delay(50);     
+       }
+       // Reseta o timer de Sync para não conectar de novo imediatamente
+       lastSync = millis(); 
+       
+       if (offlineBuffer.empty() && forcarSincronizacao) {
+           Serial.println("Comando Sync Concluido!");
+           forcarSincronizacao = false;
+       }
     }
-    client.loop();
   }
 
   unsigned long now = millis();
-  float temp = dht.readTemperature();
-  int luz = analogRead(PIN_LDR); 
 
-  bool erroSensor = isnan(temp);
-  if (erroSensor) temp = 0.0;
+  // --- OLHEIRO: LEITURA RÁPIDA (1s) PARA TELA E ALARMES ---
+  if (now - lastSensorRead > INTERVALO_LEITURA_TELA) {
+      lastSensorRead = now;
 
-  atualizarHardware(client.connected(), erroSensor, luz);
+      setRGB(0,0,0);
+      delay(5); 
+      int luz = analogRead(PIN_LDR); 
 
-  if (now - lastMsg > intervaloEnvioReal) {
-    lastMsg = now;
-
-    StaticJsonDocument<256> doc;
-    doc["box_id"] = box_id;
-    doc["temperatura"] = temp; 
-    doc["luz"] = luz;
-    doc["aberta"] = (luz < LIMITE_LUZ_ALARME); 
-
-    char buffer[256];
-    serializeJson(doc, buffer);
-
-    if (client.connected()) {
-      Serial.print("Enviando (Online): ");
-      Serial.println(buffer);
-      client.publish(topicTelemetria.c_str(), buffer);
+      float temp = dht.readTemperature();
+      bool erroSensor = isnan(temp);
+      if (erroSensor) temp = 0.0;
       
-      while (!offlineBuffer.empty()) {
-        client.publish(topicTelemetria.c_str(), offlineBuffer.front().c_str());
-        offlineBuffer.erase(offlineBuffer.begin());
-        delay(50); 
-      }
-    } else {
-      Serial.print("Salvando (Offline) - Buffer: ");
-      Serial.println(offlineBuffer.size() + 1);
+      // --- CHECAGEM DE EMERGÊNCIA ---
+      bool caixaViolada = (luz < LIMITE_LUZ_ALARME);
+      bool variacaoBrusca = (!erroSensor && abs(temp - ultimaTempEnviada) > LIMITE_VARIACAO_TEMP && ultimaTempEnviada != -999.0);
+      modoEmergencia = (caixaViolada || variacaoBrusca);
+      bool emergenciaValida = (modoEmergencia && (now - lastMsgEmergencia > 5000));
+
+      // --- DEFINIÇÃO DOS TEMPOS ---
+      bool horaDeMedir = (now - lastMedicao > intervaloMedicaoReal);         // Hora de gravar no buffer?
+      bool horaDeSync  = (now - lastSync > intervaloSincronizacaoReal);      // Hora de ligar o WiFi?
       
-      if (offlineBuffer.size() >= CAPACIDADE_MEMORIA_MENSAGENS) {
-        offlineBuffer.erase(offlineBuffer.begin()); 
+      // Se a memória estiver cheia (90%), força sync
+      bool memoriaCheia = (offlineBuffer.size() > (CAPACIDADE_MEMORIA_MENSAGENS * 0.9));
+
+      // --- GERENCIAMENTO DE CONEXÃO ---
+      // LIGA O WIFI SE: Hora do Sync OU Memória Cheia OU Emergência OU Comando Manual
+      gerenciarConexao(horaDeSync || memoriaCheia, emergenciaValida, forcarSincronizacao);
+      
+      atualizarHardware(wifiLigado, erroSensor, luz);
+      drawScreen(temp, luz, offlineBuffer.size(), wifiLigado, erroSensor);
+
+      // --- LÓGICA DE MEDIÇÃO E GRAVAÇÃO ---
+      // Acontece independente do WiFi estar ligado ou não
+      if (horaDeMedir || emergenciaValida || forcarSincronizacao) {
+        
+        // Atualiza timer de medição
+        if (horaDeMedir) {
+           lastMedicao = now;
+           ultimaTempEnviada = temp;
+        }
+        if (emergenciaValida) {
+           lastMsgEmergencia = now; 
+        }
+
+        StaticJsonDocument<256> doc;
+        doc["box_id"] = box_id;
+        doc["temperatura"] = temp; 
+        doc["luz"] = luz;
+        doc["aberta"] = caixaViolada; 
+        
+        if (modoEmergencia) doc["alerta"] = "EVENTO_CRITICO"; 
+        if (forcarSincronizacao) doc["tipo"] = "SYNC_MANUAL";
+
+        char buffer[256];
+        serializeJson(doc, buffer);
+
+        // Se o WiFi por acaso estiver ligado E conectado, manda direto.
+        // Se não, salva no Buffer.
+        if (wifiLigado && client.connected()) {
+          Serial.print("[ONLINE DIRECT] Enviando: "); Serial.println(buffer);
+          client.publish(topicTelemetria.c_str(), buffer);
+        } else {
+          Serial.print("[GRAVANDO BUFFER] ");
+          Serial.print(offlineBuffer.size() + 1);
+          Serial.print("/");
+          Serial.print(CAPACIDADE_MEMORIA_MENSAGENS);
+          Serial.print(": ");
+          Serial.println(buffer);
+          
+          if (offlineBuffer.size() >= CAPACIDADE_MEMORIA_MENSAGENS) {
+            Serial.println("!! OVERWRITE !!");
+            offlineBuffer.erase(offlineBuffer.begin()); 
+          }
+          offlineBuffer.push_back(String(buffer));
+        }
       }
-      offlineBuffer.push_back(String(buffer));
-    }
-    
-    drawScreen(temp, luz, offlineBuffer.size(), client.connected(), erroSensor);
   }
 }
