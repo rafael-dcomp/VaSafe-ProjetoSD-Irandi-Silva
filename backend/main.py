@@ -29,12 +29,13 @@ INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "telemetria")
 USERS_FILE = "users.json"
 
 # --- SETUP INFLUXDB ---
+print(f"🔌 Conectando ao InfluxDB em {INFLUX_URL}...")
 influx_client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG, timeout=20000)
 write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 query_api = influx_client.query_api()
 
 # --- SETUP MQTT ---
-mqtt_client = mqtt.Client(client_id="vasafe-backend", protocol=mqtt.MQTTv311)
+mqtt_client = mqtt.Client(client_id="vasafe-backend-api", protocol=mqtt.MQTTv311)
 
 # --- FUNÇÕES DE USUÁRIO ---
 def load_users():
@@ -55,38 +56,35 @@ def save_new_user(usuario, senha):
         json.dump(users, f)
     return True
 
-# --- LÓGICA DE SAÚDE (CORRIGIDA) ---
+# --- LÓGICA DE SAÚDE (Compatível com novo Front) ---
 def calcular_saude_lote(historico):
+    # Se não tem histórico, retorna None para o Front entender como OFFLINE (Cinza)
     if not historico:
-        # Retorna None para que o React entenda como cinza/offline, não fraude
-        return None, "AGUARDANDO", "#cbd5e1", "Aguardando dados..."
+        return None, "AGUARDANDO", "#cbd5e1", "Aguardando conexão..."
 
-    # Pega o dado mais recente para determinar o estado ATUAL
     dado_atual = historico[0]
     
-    # Se o ESP32 enviou alerta crítico (Flag de Violação Real)
+    # 1. Checagem de Fraude/Violação (Prioridade Máxima -> Preto)
     if dado_atual["violacao"]: 
         return 0, "FRAUDE", "#000000", "Violação detectada pelo Sensor!"
 
-    # Cálculo normal de saúde
+    # 2. Cálculo de Saúde
     saude = 100.0
-    
-    # Verifica temperatura do momento atual
     temp = dado_atual["temperatura"]
     
-    # Penalidades (Apenas reduz a saúde, não zera, a menos que o ESP mande violacao)
+    # Penalidade por temperatura (exemplo: fora de 2°C a 8°C)
     if temp > 8 or temp < 2:
         saude -= 20 
     
+    # Penalidade por tampa aberta
     if dado_atual["tampa_aberta"]:
         saude -= 10
 
-    # Limites
-    saude = max(saude, 0) # Nunca menor que 0
-    saude = min(saude, 100)
+    # Limites (0 a 100)
+    saude = max(0, min(saude, 100))
 
-    # Definição do Status Visual
-    if dado_atual["violacao"]: # Redundância para garantir
+    # 3. Definição do Status Visual e Cores
+    if dado_atual["violacao"]:
          return 0, "FRAUDE", "#000000", "Violação Crítica!"
     elif dado_atual["tampa_aberta"]:
         return saude, "ALERTA", "#eab308", "Tampa Aberta!"
@@ -97,30 +95,58 @@ def calcular_saude_lote(historico):
     else:
         return saude, "APROVADO", "#22c55e", "Condições ideais."
 
-# --- CALLBACKS MQTT ---
+# --- CALLBACKS MQTT (Com Limpeza de String) ---
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
-        print("✅ MQTT conectado")
+        print("✅ MQTT conectado com sucesso!")
         client.subscribe("vasafe/+/telemetria")
     else:
-        print("❌ Erro MQTT:", rc)
+        print(f"❌ Falha ao conectar no MQTT. Código: {rc}")
 
 def on_message(client, userdata, msg):
     try:
-        payload = json.loads(msg.payload.decode())
-        print(f"📥 MQTT Recebido: {payload}")
+        # 1. Pega a mensagem bruta
+        raw_msg = msg.payload.decode().strip()
+        
+        # 2. LIMPEZA AVANÇADA DE STRING
+        # Se for mensagem de log do sistema (ex: DESLIGANDO WIFI), ignora
+        if ">>>" in raw_msg or "DESLIGANDO" in raw_msg:
+            print(f"ℹ️ Log de sistema ignorado: {raw_msg}")
+            return
 
-        box_id = payload.get("box_id", "unknown")
-        # Conversão segura
-        temperatura = float(payload.get("temperatura", 0))
+        # Remove prefixos conhecidos
+        clean_msg = raw_msg.replace("[BUFFER]", "").replace("Upload:", "").strip()
+
+        # Garante que pegamos apenas o JSON (do primeiro '{' até o último '}')
+        # Isso resolve casos onde sobram espaços ou caracteres estranhos nas pontas
+        idx_inicio = clean_msg.find('{')
+        idx_fim = clean_msg.rfind('}')
+        
+        if idx_inicio != -1 and idx_fim != -1:
+            clean_msg = clean_msg[idx_inicio : idx_fim + 1]
+        else:
+            # Se não achar chaves {}, não é JSON válido
+            return 
+
+        # 3. Converte para JSON
+        payload = json.loads(clean_msg)
+        
+        # Logs apenas para debug visual
+        print(f"📥 [Dados] ID: {payload.get('box_id')} | Temp: {payload.get('temperatura')} | Bat: {payload.get('bateria')}%")
+
+        # 4. Extração de dados com valores padrão seguros
+        box_id = payload.get("box_id", "desconhecido")
+        temperatura = float(payload.get("temperatura", 0.0))
         tampa_aberta = bool(payload.get("aberta", False))
         luz = int(payload.get("luz", 0))
         bateria = int(payload.get("bateria", 0))
         
-        # A lógica de fraude vem do ESP32. Se o ESP disser que violou, violou.
+        # Lógica de Violação (Se o ESP mandar alerta ou se a lógica for local)
+        # Aqui assumimos que se vier "alerta" = "EVENTO_CRITICO", é fraude.
         alerta_recebido = payload.get("alerta", "")
         violacao = (alerta_recebido == "EVENTO_CRITICO")
 
+        # 5. Grava no InfluxDB
         point = (
             Point("telemetria")
             .tag("lote", box_id)
@@ -134,8 +160,10 @@ def on_message(client, userdata, msg):
 
         write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
 
+    except json.JSONDecodeError:
+        print(f"❌ JSON Inválido. Recebido: {msg.payload.decode()}")
     except Exception as e:
-        print("❌ Erro ao processar mensagem:", e)
+        print(f"❌ Erro ao processar mensagem: {e}")
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
@@ -143,6 +171,7 @@ mqtt_client.on_message = on_message
 def iniciar_mqtt():
     while True:
         try:
+            print(f"📡 Tentando conectar ao MQTT Broker: {MQTT_BROKER}:{MQTT_PORT}")
             mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
             mqtt_client.loop_forever()
         except Exception as e:
@@ -155,6 +184,89 @@ def startup():
 
 # --- ENDPOINTS ---
 
+@app.get("/analise/{lote}")
+def analise_lote(lote: str):
+    # Query busca dados das últimas 24h
+    query = f'''
+    from(bucket: "{INFLUX_BUCKET}")
+      |> range(start: -24h)
+      |> filter(fn: (r) => r["_measurement"] == "telemetria")
+      |> filter(fn: (r) => r["lote"] == "{lote}")
+      |> pivot(rowKey:["_time"], columnKey:["_field"], valueColumn:"_value")
+      |> sort(columns: ["_time"], desc: true)
+      |> limit(n: 50)
+    '''
+
+    try:
+        result = query_api.query(query=query, org=INFLUX_ORG)
+        historico = []
+        
+        for table in result:
+            for r in table.records:
+                # O .get() é fundamental aqui caso o dado antigo não tenha 'bateria' ou 'luz'
+                historico.append({
+                    "time": r.get_time(),
+                    "temperatura": float(r.get("temperatura", 0)),
+                    "tampa_aberta": bool(r.get("tampa_aberta", False)),
+                    "violacao": bool(r.get("violacao", False)),
+                    "bateria": int(r.get("bateria", 0)),
+                    "luz": int(r.get("luz", 0))
+                })
+
+        # CASO 1: SEM DADOS (OFFLINE)
+        if not historico:
+             return {
+                "lote": lote,
+                "analise_risco": {
+                    "health_score": None, # Retorna null para o React pintar de Cinza/Offline
+                    "status_operacional": "OFFLINE", 
+                    "indicador_led": "#cbd5e1", 
+                    "recomendacao": "Sem sinal do dispositivo."
+                },
+                "telemetria": {
+                    "temperatura_atual": 0, 
+                    "bateria": 0, 
+                    "historico": []
+                }
+            }
+
+        # CASO 2: COM DADOS
+        saude, status, cor, msg = calcular_saude_lote(historico)
+        recente = historico[0]
+
+        return {
+            "lote": lote,
+            "analise_risco": {
+                "health_score": saude,
+                "status_operacional": status,
+                "indicador_led": cor,
+                "recomendacao": msg
+            },
+            "telemetria": {
+                "temperatura_atual": round(recente["temperatura"], 1),
+                "violacao": recente["violacao"],
+                "tampa_aberta": recente["tampa_aberta"],
+                "bateria": recente.get("bateria", 0),
+                "luz": recente.get("luz", 0),
+                "historico": historico
+            }
+        }
+
+    except Exception as e:
+        print(f"❌ ERRO CRÍTICO NA API ({lote}): {e}")
+        # Retorno de erro seguro para não quebrar o front
+        return {
+            "lote": lote,
+            "analise_risco": {
+                "health_score": None, 
+                "status_operacional": "OFFLINE", 
+                "indicador_led": "#cbd5e1", 
+                "recomendacao": "Erro interno no servidor"
+            },
+            "telemetria": {"temperatura_atual": 0, "bateria": 0, "historico": []}
+        }
+
+# --- ENDPOINTS DE AUTH ---
 @app.post("/register")
 def register(dados: dict):
     usuario = dados.get("usuario")
@@ -174,85 +286,3 @@ def login(dados: dict):
     if usuario in users and users[usuario] == senha:
         return {"token": "token-simples-jwt-fake", "nome": usuario}
     raise HTTPException(status_code=401, detail="Credenciais inválidas")
-
-@app.get("/analise/{lote}")
-def analise_lote(lote: str):
-    # Busca dados ordenados por tempo (decrescente)
-    query = f'''
-    from(bucket: "{INFLUX_BUCKET}")
-      |> range(start: -24h)
-      |> filter(fn: (r) => r["_measurement"] == "telemetria")
-      |> filter(fn: (r) => r["lote"] == "{lote}")
-      |> pivot(rowKey:["_time"], columnKey:["_field"], valueColumn:"_value")
-      |> sort(columns: ["_time"], desc: true)
-      |> limit(n: 50)
-    '''
-
-    try:
-        result = query_api.query(query=query, org=INFLUX_ORG)
-        historico = []
-        for table in result:
-            for r in table.records:
-                # Usamos .get() com valor padrão para evitar erro 500 se o campo não existir
-                historico.append({
-                    "time": r.get_time(),
-                    "temperatura": float(r.get("temperatura", 0)),
-                    "tampa_aberta": bool(r.get("tampa_aberta", False)),
-                    "violacao": bool(r.get("violacao", False)),
-                    "bateria": int(r.get("bateria", 0)),
-                    "luz": int(r.get("luz", 0))
-                })
-
-        # CASO 1: SEM DADOS (OFFLINE)
-        if not historico:
-             return {
-                "lote": lote,
-                "analise_risco": {
-                    "health_score": None, # Importante: None vira null no JSON (Cinza no React)
-                    "status_operacional": "OFFLINE", 
-                    "indicador_led": "#cbd5e1", 
-                    "recomendacao": "Aguardando conexão..."
-                },
-                "telemetria": {
-                    "temperatura_atual": 0, 
-                    "bateria": 0, 
-                    "historico": []
-                }
-            }
-
-        # CASO 2: DADOS EXISTEM -> Calcular Saúde
-        saude, status, cor, msg = calcular_saude_lote(historico)
-        
-        recente = historico[0]
-
-        return {
-            "lote": lote,
-            "analise_risco": {
-                "health_score": saude, # Se for 0 é fraude, se for None é offline
-                "status_operacional": status,
-                "indicador_led": cor,
-                "recomendacao": msg
-            },
-            "telemetria": {
-                "temperatura_atual": round(recente["temperatura"], 1),
-                "violacao": recente["violacao"],
-                "tampa_aberta": recente["tampa_aberta"],
-                "bateria": recente.get("bateria", 0),
-                "luz": recente.get("luz", 0),
-                "historico": historico
-            }
-        }
-
-    except Exception as e:
-        print(f"❌ ERRO CRÍTICO NA API: {e}")
-        # Retorna estrutura segura em caso de erro interno
-        return {
-            "lote": lote,
-            "analise_risco": {
-                "health_score": None, 
-                "status_operacional": "OFFLINE", 
-                "indicador_led": "#cbd5e1", 
-                "recomendacao": "Erro interno no servidor"
-            },
-            "telemetria": {"temperatura_atual": 0, "bateria": 0, "historico": []}
-        }
