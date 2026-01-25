@@ -1,4 +1,3 @@
-# main.py
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from influxdb_client import InfluxDBClient, Point
@@ -10,9 +9,6 @@ import time
 import threading
 from datetime import datetime
 
-# ================================
-# Configuração básica da API
-# ================================
 app = FastAPI(title="VaSafe Digital Twin API")
 
 app.add_middleware(
@@ -23,51 +19,46 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ================================
-# Variáveis de ambiente
-# ================================
+# Configurações de Ambiente
 MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
-
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
-INFLUX_TOKEN = os.getenv(
-    "INFLUX_TOKEN",
-    os.getenv("DOCKER_INFLUXDB_INIT_ADMIN_TOKEN", "token-secreto")
-)
+INFLUX_TOKEN = os.getenv("INFLUX_TOKEN", os.getenv("DOCKER_INFLUXDB_INIT_ADMIN_TOKEN", "token-secreto"))
 INFLUX_ORG = os.getenv("INFLUX_ORG", "ufsvasafe")
 INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "telemetria")
+USERS_FILE = "users.json"
 
-print("CONFIG:", MQTT_BROKER, MQTT_PORT, INFLUX_URL)
-
-# ================================
-# InfluxDB
-# ================================
-influx_client = InfluxDBClient(
-    url=INFLUX_URL,
-    token=INFLUX_TOKEN,
-    org=INFLUX_ORG,
-    timeout=20000
-)
-
+# Setup InfluxDB
+influx_client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG, timeout=20000)
 write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 query_api = influx_client.query_api()
 
-print("✅ InfluxDB conectado")
+# Setup MQTT
+mqtt_client = mqtt.Client(client_id="vasafe-backend", protocol=mqtt.MQTTv311)
 
-# ================================
-# MQTT
-# ================================
-mqtt_client = mqtt.Client(
-    client_id="vasafe-backend",
-    protocol=mqtt.MQTTv311
-)
+# Funções Auxiliares de Usuário (Simples baseada em arquivo)
+def load_users():
+    if not os.path.exists(USERS_FILE):
+        return {"admin": "admin"} # Usuário padrão
+    try:
+        with open(USERS_FILE, 'r') as f:
+            return json.load(f)
+    except:
+        return {"admin": "admin"}
 
-# ================================
-# Regra de negócio
-# ================================
+def save_new_user(usuario, senha):
+    users = load_users()
+    if usuario in users:
+        return False
+    users[usuario] = senha
+    with open(USERS_FILE, 'w') as f:
+        json.dump(users, f)
+    return True
+
+# Lógica de Saúde do Lote
 def calcular_saude_lote(historico):
     if not historico:
-        return 0, "AGUARDANDO", "#808080", "Aguardando dados da caixa..."
+        return 0, "AGUARDANDO", "#808080", "Aguardando dados..."
 
     saude = 100.0
     violacao_detectada = False
@@ -78,10 +69,8 @@ def calcular_saude_lote(historico):
 
         if temp > 8 or temp < 2:
             saude -= 20
-
         if aberta:
             saude -= 5
-
         if p["violacao"]:
             violacao_detectada = True
             saude = 0
@@ -98,9 +87,7 @@ def calcular_saude_lote(historico):
     else:
         return saude, "CRITICO", "#ef4444", "Risco biológico!"
 
-# ================================
-# MQTT Callbacks
-# ================================
+# Callbacks MQTT
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ MQTT conectado")
@@ -113,12 +100,9 @@ def on_message(client, userdata, msg):
         payload = json.loads(msg.payload.decode())
         print("📥 MQTT:", payload)
 
-        box_id = payload["box_id"]
-
+        box_id = payload.get("box_id", "unknown")
         temperatura = float(payload.get("temperatura", 0))
-        luz = int(payload.get("luz", 0))
         tampa_aberta = bool(payload.get("aberta", False))
-
         violacao = temperatura > 8 or temperatura < 2
 
         point = (
@@ -130,43 +114,51 @@ def on_message(client, userdata, msg):
             .time(datetime.utcnow())
         )
 
-        write_api.write(
-            bucket=INFLUX_BUCKET,
-            org=INFLUX_ORG,
-            record=point
-        )
-
-        print("💾 Telemetria salva no Influx")
+        write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
 
     except Exception as e:
-        print("❌ Erro MQTT:", e)
+        print("❌ Erro ao processar mensagem:", e)
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
 
-# ================================
-# Inicialização MQTT
-# ================================
 def iniciar_mqtt():
     while True:
         try:
             mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
             mqtt_client.loop_forever()
-        except Exception as e:
-            print("⚠️ MQTT offline, tentando novamente...", e)
+        except Exception:
             time.sleep(5)
 
 @app.on_event("startup")
 def startup():
     threading.Thread(target=iniciar_mqtt, daemon=True).start()
 
-# ================================
-# Endpoints
-# ================================
+# --- ENDPOINTS ---
+
+@app.post("/register")
+def register(dados: dict):
+    usuario = dados.get("usuario")
+    senha = dados.get("senha")
+    
+    if not usuario or not senha:
+        raise HTTPException(status_code=400, detail="Dados incompletos")
+        
+    sucesso = save_new_user(usuario, senha)
+    if not sucesso:
+        raise HTTPException(status_code=400, detail="Usuário já existe")
+        
+    return {"message": "Usuário criado com sucesso"}
+
 @app.post("/login")
 def login(dados: dict):
-    if dados.get("usuario") == "admin" and dados.get("senha") == "admin":
-        return {"token": "token-ok", "nome": "Fiscal Sanitário"}
+    usuario = dados.get("usuario")
+    senha = dados.get("senha")
+    users = load_users()
+    
+    if usuario in users and users[usuario] == senha:
+        return {"token": "token-simples-jwt-fake", "nome": usuario}
+    
     raise HTTPException(status_code=401, detail="Credenciais inválidas")
 
 @app.get("/analise/{lote}")
@@ -183,7 +175,6 @@ def analise_lote(lote: str):
 
     try:
         result = query_api.query(query=query, org=INFLUX_ORG)
-
         historico = []
         for table in result:
             for r in table.records:
@@ -195,7 +186,6 @@ def analise_lote(lote: str):
                 })
 
         temperatura_atual = historico[0]["temperatura"] if historico else 0.0
-
         saude, status, cor, msg = calcular_saude_lote(historico)
 
         return {
@@ -219,13 +209,8 @@ def analise_lote(lote: str):
         return {
             "lote": lote,
             "analise_risco": {
-                "health_score": 0,
-                "status_operacional": "OFFLINE",
-                "indicador_led": "#808080",
-                "recomendacao": "Backend indisponível"
+                "health_score": 0, "status_operacional": "OFFLINE", 
+                "indicador_led": "#808080", "recomendacao": "Erro interno"
             },
-            "telemetria": {
-                "temperatura_atual": 0,
-                "historico": []
-            }
+            "telemetria": {"temperatura_atual": 0, "historico": []}
         }

@@ -11,11 +11,12 @@
 // ==========================================
 // CONFIGURAÇÕES DE REDE E SERVIDOR
 // ==========================================
-const char* SSID_WIFI = "ENG.BRITO";       
-const char* SENHA_WIFI = "Engenheiros.com"; 
+const char* SSID_WIFI = "IRAN";       
+const char* SENHA_WIFI = "iranprecar321"; 
 
 // IMPORTANTE: Este IP deve ser o do seu computador (Wi-Fi)
-const char* MQTT_SERVER = "192.168.3.219"; 
+// Substitua pelo IP que aparece na sua imagem da AWS
+const char* MQTT_SERVER = "54.197.203.94";
 const int MQTT_PORT = 1883;
 
 // ID único desta caixa (deve ser igual ao configurado no Python)
