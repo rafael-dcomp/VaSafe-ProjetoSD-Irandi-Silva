@@ -1,12 +1,46 @@
 import { useState, useEffect, useCallback } from 'react';
 import axios from 'axios';
 import {
-  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend
+  LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend, Area, ComposedChart
 } from 'recharts';
 import StatusBadge from './StatusBadge';
 import StatCard from './StatCard';
 
+// Importe seu arquivo CSS aqui
+import './DetailScreen.css'; 
+
 const API_URL = "http://98.88.32.2:8000";
+
+// Cores do Tema (Usadas nas props dos gráficos e cards)
+const THEME = {
+  primary: '#3b82f6',
+  danger: '#ef4444',
+  warning: '#f59e0b',
+  success: '#22c55e',
+  dark: '#1e293b',
+  grid: '#f1f5f9',
+  textMuted: '#94a3b8'
+};
+
+// Componente de Tooltip Personalizado
+const CustomTooltip = ({ active, payload, label }) => {
+  if (active && payload && payload.length) {
+    return (
+      <div className="custom-tooltip">
+        <p className="tooltip-label">{label}</p>
+        {payload.map((entry, index) => (
+          <div key={index} className="tooltip-item">
+            <div style={{ width: 8, height: 8, borderRadius: '50%', backgroundColor: entry.color }} />
+            <span>
+              {entry.name}: <strong>{entry.value} {entry.unit}</strong>
+            </span>
+          </div>
+        ))}
+      </div>
+    );
+  }
+  return null;
+};
 
 export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
   const [analise, setAnalise] = useState(null);
@@ -20,7 +54,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
       setAnalise(res.data);
       setLastUpdate(new Date());
     } catch (e) {
-      // Não sobrescreve estado anterior em caso de erro — mantém último estado exibido
       console.error("Erro ao detalhar caixa:", e);
     }
   }, [caixaId]);
@@ -36,166 +69,212 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
     try {
       await fetchDetalhe();
     } finally {
-      // Pequeno delay visual para melhor UX
-      setTimeout(() => setSyncing(false), 400);
+      setTimeout(() => setSyncing(false), 600);
     }
   };
 
   if (!analise) {
     return (
-      <div className="detail-wrapper">
-        <div className="panel" style={{ textAlign: 'center' }}>
-          <h2>⌛</h2>
-          <p className="update-badge">Conectando ao Digital Twin...</p>
-        </div>
+      <div className="detail-wrapper loading-state">
+        <div className="spinner"></div>
+        <p>Conectando ao Digital Twin...</p>
       </div>
     );
   }
 
-  // Fallbacks seguros
+  // --- Processamento de Dados ---
   const telemetria = analise.telemetria ?? {};
   const analise_risco = analise.analise_risco ?? {};
 
   const isViolado = Boolean(telemetria.violacao);
   const isAberta = Boolean(telemetria.tampa_aberta);
-  const isOffline = analise_risco.health_score === null
-    || analise_risco.status_operacional === 'OFFLINE'
-    || analise_risco.status_operacional === 'AGUARDANDO';
+  const isOffline = analise_risco.health_score === null || analise_risco.status_operacional === 'OFFLINE';
 
-  // Prepara dados do gráfico (ordena e formata)
   const historicoRaw = Array.isArray(telemetria.historico) ? telemetria.historico.slice() : [];
+  
   const chartData = historicoRaw
     .map(d => ({
       ...d,
-      temperatura: typeof d.temperatura === 'number' ? d.temperatura :
-                   (d.temperatura ? Number(d.temperatura) : null),
-      tampa_aberta: d.tampa_aberta ? 1 : 0,
+      temperatura: d.temperatura ? Number(d.temperatura) : null,
+      tampa_aberta: d.tampa_aberta ? 1 : 0, // 1 = Aberta, 0 = Fechada
       timeObj: d.time ? new Date(d.time) : null
     }))
     .filter(d => d.timeObj)
     .sort((a, b) => a.timeObj - b.timeObj)
     .map(d => ({
       ...d,
-      timeLabel: d.timeObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
+      timeLabel: d.timeObj.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit', second: '2-digit' })
     }));
 
-  const displayTemp = (v) => (typeof v === 'number' && !Number.isNaN(v) ? `${v.toFixed(1)}°C` : '--');
-  const displayBattery = (b) => (typeof b === 'number' && !Number.isNaN(b) ? `${b}%` : '--');
-
-  // Passa cores dinâmicas para StatCard (eles devem aplicar essas cores)
-  const batteryColor = (b) => (typeof b === 'number' ? (b < 20 ? 'var(--color-danger)' : 'var(--text-main)') : 'var(--text-muted)');
+  const displayTemp = (v) => (typeof v === 'number' ? `${v.toFixed(1)}°C` : '--');
+  const displayBattery = (b) => (typeof b === 'number' ? `${b}%` : '--');
+  
+  const getHeaderColor = () => {
+    if (isViolado) return THEME.danger;
+    if (isOffline) return THEME.textMuted;
+    if (isAberta) return THEME.warning;
+    return THEME.dark;
+  };
 
   return (
-    <div className={`detail-wrapper ${isViolado ? 'alert-violation' : (isAberta ? 'alert-open' : '')}`}>
+    <div className="detail-wrapper fadeIn">
+      {/* --- Header / Controles --- */}
       <div className="controls-area">
-        <div style={{ display: 'flex', gap: 12, alignItems: 'center' }}>
-          <button className="btn-voltar" onClick={onVoltar} aria-label="Voltar">
-            ⬅ Voltar
+        <div className="header-left">
+          <button className="btn-voltar" onClick={onVoltar}>
+            <span style={{ fontSize: '1.2rem' }}>‹</span> Voltar
           </button>
-
-          <div>
-            <div style={{ fontWeight: 700 }}>{caixaNome}</div>
-            <div className="update-badge">
-              {lastUpdate ? `Última sincronização: ${lastUpdate.toLocaleTimeString()}` : 'Ainda sem atualizações'}
-            </div>
+          
+          <div className="header-info">
+            <h1>{caixaNome}</h1>
+            <span className="last-update">
+              {lastUpdate ? `Atualizado às ${lastUpdate.toLocaleTimeString()}` : '...'}
+            </span>
           </div>
         </div>
 
-        <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-          <button
-            className="btn-voltar"
-            onClick={handleSyncClick}
-            aria-label="Sincronizar agora"
-            disabled={syncing}
-            title="Forçar sincronização"
-          >
-            {syncing ? 'Sincronizando...' : 'Sincronizar'}
-          </button>
-        </div>
+        <button 
+          className={`btn-sync ${syncing ? 'spinning' : ''}`} 
+          onClick={handleSyncClick}
+          disabled={syncing}
+        >
+          {syncing ? '↻' : '↻ Sincronizar'}
+        </button>
       </div>
 
-      <div className="header-detail">
-        <h2 style={{ color: isViolado ? 'var(--color-danger)' : (isOffline ? 'var(--text-muted)' : 'var(--text-main)') }}>
-          {isOffline ? `OFFLINE — ${caixaNome}` : (isViolado ? '⚠️ CAIXA VIOLADA' : `Detalhes — ${caixaNome}`)}
-        </h2>
-
-        {isAberta && !isViolado && !isOffline && <span className="tag-aberta">TAMPA ABERTA</span>}
-
-        <div style={{ marginLeft: 'auto' }}>
-          <StatusBadge
-            status={analise_risco.status_operacional ?? (isOffline ? 'OFFLINE' : '—')}
-            cor={analise_risco.indicador_led ?? (isOffline ? '#cbd5e1' : '#22c55e')}
-            recomendacao={analise_risco.recomendacao ?? ''}
-          />
+      {/* --- Status Banner --- */}
+      <div className="status-banner" style={{ borderLeft: `6px solid ${getHeaderColor()}` }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
+          <h2 style={{ color: getHeaderColor(), margin: 0 }}>
+            {isOffline ? 'OFFLINE' : (isViolado ? 'VIOLAÇÃO DETECTADA' : 'Monitoramento Ativo')}
+          </h2>
+          {isAberta && !isViolado && !isOffline && (
+            <span className="tag-warning">TAMPA ABERTA</span>
+          )}
         </div>
+        
+        <StatusBadge 
+          status={analise_risco.status_operacional ?? '---'}
+          cor={analise_risco.indicador_led ?? '#ccc'}
+          recomendacao={analise_risco.recomendacao}
+        />
       </div>
 
+      {/* --- Grid de Cards --- */}
       <div className="stats-grid">
         <StatCard
-          titulo="Saúde da Caixa"
-          valor={isOffline ? '--' : (analise_risco.health_score ?? '--')}
+          titulo="Saúde"
+          valor={analise_risco.health_score ?? '--'}
           unidade={isOffline ? '' : '%'}
-          cor={(analise_risco.health_score ?? 100) < 60 ? 'var(--color-danger)' : 'var(--color-success)'}
-          helpText={analise_risco.recomendacao}
+          cor={(analise_risco.health_score ?? 100) < 60 ? THEME.danger : THEME.success}
+          icon="❤️"
         />
-
         <StatCard
-          titulo="Temperatura Atual"
+          titulo="Temperatura"
           valor={displayTemp(telemetria.temperatura_atual)}
           unidade=""
-          cor="var(--primary)"
-          helpText={isOffline ? 'Sem dados' : 'Temperatura medida pelo sensor'}
+          cor={THEME.primary}
+          icon="❄️"
         />
-
+        <StatCard
+          titulo="Bateria"
+          valor={displayBattery(telemetria.bateria)}
+          unidade=""
+          cor={telemetria.bateria < 20 ? THEME.danger : THEME.dark}
+          icon="🔋"
+        />
         <StatCard
           titulo="Segurança"
           valor={isViolado ? 'CRÍTICO' : (isAberta ? 'ALERTA' : 'OK')}
           unidade=""
-          cor={isViolado ? 'var(--color-danger)' : (isAberta ? 'var(--color-warning)' : 'var(--color-success)')}
-          helpText={isViolado ? 'Violação detectada' : (isAberta ? 'Tampa aberta' : 'Sem problemas')}
-        />
-
-        <StatCard
-          titulo="Bateria"
-          valor={typeof telemetria.bateria === 'undefined' ? '--' : displayBattery(telemetria.bateria)}
-          unidade=""
-          cor={batteryColor(telemetria.bateria)}
-          helpText={typeof telemetria.bateria === 'undefined' ? 'Fonte externa (alimentado via USB)' : 'Nível de bateria'}
+          cor={isViolado ? THEME.danger : (isAberta ? THEME.warning : THEME.success)}
+          icon="🔒"
         />
       </div>
 
-      <div className="panel">
-        <h3>Histórico em Tempo Real</h3>
+      {/* --- Gráfico --- */}
+      <div className="chart-panel">
+        <div className="chart-header">
+          <h3>Histórico Recente</h3>
+          <p>Temperatura e Eventos de Abertura</p>
+        </div>
+
         <div className="chart-container">
           {chartData.length === 0 ? (
-            <div style={{ padding: 40, textAlign: 'center', color: 'var(--text-muted)' }}>
-              Sem histórico disponível
-            </div>
+            <div className="empty-state">Sem dados de histórico disponíveis</div>
           ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={chartData.map(d => ({ ...d, time: d.timeLabel }))}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                <XAxis dataKey="time" tick={{ fontSize: 12 }} />
-                <YAxis domain={['auto', 'auto']} unit="°C" tick={{ fontSize: 12 }} />
-                <Tooltip contentStyle={{ borderRadius: 8 }} />
-                <Legend verticalAlign="top" height={36} />
-                <Line
+            <ResponsiveContainer width="100%" height={300}>
+              <ComposedChart data={chartData} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
+                <defs>
+                  <linearGradient id="colorTemp" x1="0" y1="0" x2="0" y2="1">
+                    <stop offset="5%" stopColor={THEME.primary} stopOpacity={0.2}/>
+                    <stop offset="95%" stopColor={THEME.primary} stopOpacity={0}/>
+                  </linearGradient>
+                </defs>
+
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e2e8f0" />
+                
+                <XAxis 
+                  dataKey="timeLabel" 
+                  stroke="#94a3b8" 
+                  fontSize={12} 
+                  tickLine={false}
+                  axisLine={false}
+                  minTickGap={40} 
+                  dy={10}
+                />
+
+                <YAxis 
+                  yAxisId="left"
+                  stroke="#94a3b8" 
+                  fontSize={12} 
+                  tickLine={false}
+                  axisLine={false}
+                  unit="°C"
+                  domain={['auto', 'auto']}
+                />
+
+                <YAxis 
+                  yAxisId="right"
+                  orientation="right"
+                  domain={[0, 1]}
+                  ticks={[0, 1]}
+                  hide={true} 
+                />
+
+                <Tooltip content={<CustomTooltip />} />
+                
+                <Legend 
+                  verticalAlign="top" 
+                  align="right" 
+                  iconType="circle" 
+                  wrapperStyle={{ paddingBottom: '20px' }}
+                />
+
+                <Area
+                  yAxisId="left"
                   type="monotone"
                   dataKey="temperatura"
-                  stroke={isViolado ? "var(--color-dark)" : "var(--primary)"}
+                  name="Temperatura"
+                  stroke={THEME.primary}
+                  fillOpacity={1}
+                  fill="url(#colorTemp)"
                   strokeWidth={3}
-                  dot={false}
-                  name="Temperatura (°C)"
+                  unit="°C"
                 />
+
                 <Line
-                  type="step"
+                  yAxisId="right"
+                  type="stepAfter"
                   dataKey="tampa_aberta"
-                  stroke="var(--color-warning)"
+                  name="Tampa Aberta"
+                  stroke={THEME.warning}
                   strokeWidth={2}
                   dot={false}
-                  name="Tampa Aberta (0/1)"
+                  strokeDasharray="5 5"
+                  unit=""
                 />
-              </LineChart>
+              </ComposedChart>
             </ResponsiveContainer>
           )}
         </div>
