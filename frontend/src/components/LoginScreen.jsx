@@ -1,7 +1,7 @@
 import { useState } from 'react';
 import axios from 'axios';
 
-const API_URL = "http://54.197.203.94:8000";
+const API_URL = "http://98.88.32.2:8000";
 
 export default function LoginScreen({ onLoginSuccess }) {
   const [user, setUser] = useState(""); 
@@ -11,7 +11,7 @@ export default function LoginScreen({ onLoginSuccess }) {
   const handleLogin = async () => {
     try {
       await axios.post(`${API_URL}/login`, { usuario: user, senha: pass });
-      onLoginSuccess(); // Avisa o App que logou
+      onLoginSuccess(); 
     } catch (err) {
       setError(true);
       alert("Erro. Tente admin/admin");
