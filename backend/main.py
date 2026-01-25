@@ -40,7 +40,7 @@ mqtt_client = mqtt.Client(client_id="vasafe-backend-api", protocol=mqtt.MQTTv311
 # --- FUNÇÕES DE USUÁRIO ---
 def load_users():
     if not os.path.exists(USERS_FILE):
-        return {"admin": "admin"} 
+        return {"admin": "admin"}
     try:
         with open(USERS_FILE, 'r') as f:
             return json.load(f)
@@ -63,39 +63,40 @@ def calcular_saude_lote(historico):
         return None, "AGUARDANDO", "#cbd5e1", "Aguardando conexão..."
 
     dado_atual = historico[0]
-    
+
     # 1. Checagem de Fraude/Violação (Prioridade Máxima -> Preto)
-    if dado_atual.get("violacao"): 
+    if dado_atual.get("violacao"):
         return 0, "FRAUDE", "#000000", "Violação detectada pelo Sensor!"
 
     # 2. Cálculo de Saúde
     saude = 100.0
-    temp = dado_atual["temperatura"]
-    
+
+    temp = dado_atual.get("temperatura", 0) or 0
+
     # Penalidade por temperatura (ex: fora de 2°C a 8°C)
     if temp > 8 or temp < 2:
-        saude -= 20 
-    
+        saude -= 20
+
     # Penalidade por tampa aberta
-    if dado_atual["tampa_aberta"]:
+    if dado_atual.get("tampa_aberta"):
         saude -= 10
 
     # Limites (0 a 100)
     saude = max(0, min(saude, 100))
 
-    # 3. Definição do Status Visual
+    # 3. Definição do Status Visual e Cores para o Dashboard
     if dado_atual.get("violacao"):
-         return 0, "FRAUDE", "#000000", "Violação Crítica!"
-    elif dado_atual["tampa_aberta"]:
+        return 0, "FRAUDE", "#000000", "Violação Crítica!"
+    elif dado_atual.get("tampa_aberta"):
         return saude, "ALERTA", "#eab308", "Tampa Aberta!"
     elif saude < 60:
-         return saude, "RISCO", "#ef4444", "Condições críticas."
+        return saude, "RISCO", "#ef4444", "Condições críticas."
     elif temp > 7 or temp < 3:
         return saude, "ATENÇÃO", "#eab308", "Temperatura oscilando."
     else:
         return saude, "APROVADO", "#22c55e", "Condições ideais."
 
-# --- CALLBACKS MQTT (AQUI ESTÁ A LÓGICA CORRIGIDA) ---
+# --- CALLBACKS MQTT ---
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ MQTT conectado com sucesso!")
@@ -105,64 +106,82 @@ def on_connect(client, userdata, flags, rc):
 
 def on_message(client, userdata, msg):
     try:
-        # 1. Pega a mensagem bruta e decodifica ignorando erros de caracteres estranhos
-        raw_msg = msg.payload.decode("utf-8", errors="ignore").strip()
-        
-        # 2. LOG DE DEBUG (Para você ver o que está chegando)
-        print(f"📩 [RAW] Chegou: {raw_msg}")
+        # 1. Pega a string bruta
+        raw_msg = msg.payload.decode().strip()
 
-        # 3. EXTRAÇÃO CIRÚRGICA DO JSON
-        # Ignora "Upload:", "[BUFFER]", datas, etc. Busca apenas o conteúdo entre { e }
-        idx_inicio = raw_msg.find('{')
-        idx_fim = raw_msg.rfind('}')
-
-        if idx_inicio == -1 or idx_fim == -1:
-            # Não é um JSON (pode ser log de sistema ">>> CONNECTING...")
-            return 
-
-        json_limpo = raw_msg[idx_inicio : idx_fim + 1]
-
-        # 4. CONVERSÃO
-        payload = json.loads(json_limpo)
-        
-        # 5. MAPEAMENTO DE DADOS
-        box_id = payload.get("box_id")
-        
-        if not box_id:
-            print("⚠️ JSON sem 'box_id' ignorado.")
+        # 2. FILTRAGEM DE LOGS DO SISTEMA
+        if ">>>" in raw_msg or "DESLIGANDO" in raw_msg:
             return
 
-        temperatura = float(payload.get("temperatura", 0.0))
-        # O sensor manda 'aberta', mas o Influx espera 'tampa_aberta'
-        tampa_aberta = bool(payload.get("aberta", False)) 
-        luz = int(payload.get("luz", 0))
-        bateria = int(payload.get("bateria", 0))
-        
-        # Lógica de Violação
-        violacao = False
-        if "alerta" in payload:
-            violacao = (payload["alerta"] == "EVENTO_CRITICO")
+        # 3. LIMPEZA DA STRING
+        clean_msg = raw_msg.replace("[BUFFER]", "").replace("Upload:", "").strip()
 
-        print(f"✅ [PROCESSADO] ID: {box_id} | Temp: {temperatura} | Tampa: {tampa_aberta}")
+        # 4. EXTRAÇÃO DO JSON PURO
+        idx_inicio = clean_msg.find('{')
+        idx_fim = clean_msg.rfind('}')
+
+        if idx_inicio != -1 and idx_fim != -1:
+            clean_msg = clean_msg[idx_inicio : idx_fim + 1]
+        else:
+            # Se não tiver chaves {}, não é um dado válido
+            return
+
+        # 5. CONVERSÃO PARA JSON
+        payload = json.loads(clean_msg)
+        print(f"📥 [MQTT] ID: {payload.get('box_id')} | Temp: {payload.get('temperatura')} | Bat: {payload.get('bateria')}")
+
+        # Extração segura dos dados
+        box_id = payload.get("box_id", "unknown")
+        temperatura = float(payload.get("temperatura", 0))
+        tampa_aberta = bool(payload.get("aberta", False))
+        luz = payload.get("luz", None)
+        bateria_val = payload.get("bateria", None)
+
+        # tenta convertir quando possível
+        try:
+            luz = int(luz) if luz is not None else None
+        except:
+            luz = None
+
+        try:
+            bateria = int(bateria_val) if bateria_val is not None else None
+        except:
+            bateria = None
+
+        # Define violação (pode vir no JSON como 'alerta' ou calculamos aqui)
+        alerta = payload.get("alerta", "")
+        violacao = (alerta == "EVENTO_CRITICO")
 
         # 6. GRAVAÇÃO NO INFLUXDB
+        # Escrevemos todos os fields possíveis; se algum for None, escrevemos 0 para compatibilidade,
+        # porque algumas versões do Influx/Point não aceitam None como field value.
+        # (Mas a API vai preservar None quando não houver registros para montar histórico.)
         point = (
             Point("telemetria")
             .tag("lote", box_id)
             .field("temperatura", temperatura)
             .field("tampa_aberta", tampa_aberta)
-            .field("luz", luz)
-            .field("bateria", bateria)
-            .field("violacao", violacao)
-            .time(datetime.utcnow())
         )
+
+        # Adiciona luz/bateria apenas se forem numéricos; caso contrário grava 0 para manter consistência
+        if luz is not None:
+            point = point.field("luz", luz)
+        else:
+            point = point.field("luz", 0)
+
+        if bateria is not None:
+            point = point.field("bateria", bateria)
+        else:
+            point = point.field("bateria", 0)
+
+        point = point.field("violacao", violacao).time(datetime.utcnow())
 
         write_api.write(bucket=INFLUX_BUCKET, org=INFLUX_ORG, record=point)
 
     except json.JSONDecodeError:
-        print(f"❌ Erro de JSON na string: {raw_msg}")
+        print(f"❌ Erro JSON. Recebido: {msg.payload.decode()}")
     except Exception as e:
-        print(f"❌ Erro ao processar mensagem: {e}")
+        print(f"❌ Erro processamento: {e}")
 
 mqtt_client.on_connect = on_connect
 mqtt_client.on_message = on_message
@@ -185,7 +204,7 @@ def startup():
 
 @app.get("/analise/{lote}")
 def analise_lote(lote: str):
-    # Query: Busca dados recentes
+    # Query: Busca dados, incluindo Luz e Bateria
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
       |> range(start: -24h)
@@ -199,31 +218,48 @@ def analise_lote(lote: str):
     try:
         result = query_api.query(query=query, org=INFLUX_ORG)
         historico = []
-        
+
         for table in result:
             for r in table.records:
+                # Usa .get() para evitar erro se o campo não existir em registros antigos
+                bateria_raw = r.get("bateria")
+                luz_raw = r.get("luz")
+
+                try:
+                    bateria_val = int(bateria_raw) if bateria_raw is not None else None
+                except:
+                    bateria_val = None
+
+                try:
+                    luz_val = int(luz_raw) if luz_raw is not None else None
+                except:
+                    luz_val = None
+
                 historico.append({
                     "time": r.get_time(),
-                    "temperatura": float(r.get("temperatura", 0)),
+                    "temperatura": float(r.get("temperatura", 0)) if r.get("temperatura") is not None else 0.0,
                     "tampa_aberta": bool(r.get("tampa_aberta", False)),
                     "violacao": bool(r.get("violacao", False)),
-                    "bateria": int(r.get("bateria", 0)),
-                    "luz": int(r.get("luz", 0))
+                    # Preserve None quando o campo não existir
+                    "bateria": bateria_val,
+                    "luz": luz_val
                 })
 
         # --- LÓGICA OFFLINE ---
         if not historico:
-             return {
+            return {
                 "lote": lote,
+                "offline": True,
                 "analise_risco": {
-                    "health_score": None, 
-                    "status_operacional": "OFFLINE", 
-                    "indicador_led": "#cbd5e1", 
+                    "health_score": None,  # Null faz o front ficar Cinza/AGUARDANDO
+                    "status_operacional": "OFFLINE",
+                    "indicador_led": "#cbd5e1",
                     "recomendacao": "Sem sinal do dispositivo."
                 },
                 "telemetria": {
-                    "temperatura_atual": 0, 
-                    "bateria": 0, 
+                    "temperatura_atual": 0,
+                    "bateria": None,
+                    "luz": None,
                     "historico": []
                 }
             }
@@ -234,6 +270,7 @@ def analise_lote(lote: str):
 
         return {
             "lote": lote,
+            "offline": False,
             "analise_risco": {
                 "health_score": saude,
                 "status_operacional": status,
@@ -241,11 +278,12 @@ def analise_lote(lote: str):
                 "recomendacao": msg
             },
             "telemetria": {
-                "temperatura_atual": round(recente["temperatura"], 1),
-                "violacao": recente["violacao"],
-                "tampa_aberta": recente["tampa_aberta"],
-                "bateria": recente.get("bateria", 0),
-                "luz": recente.get("luz", 0),
+                "temperatura_atual": round(recente.get("temperatura", 0), 1),
+                "violacao": recente.get("violacao", False),
+                "tampa_aberta": recente.get("tampa_aberta", False),
+                # Retorna None se não existir (agora preservado)
+                "bateria": recente.get("bateria", None),
+                "luz": recente.get("luz", None),
                 "historico": historico
             }
         }
@@ -254,13 +292,14 @@ def analise_lote(lote: str):
         print(f"❌ ERRO API: {e}")
         return {
             "lote": lote,
+            "offline": True,
             "analise_risco": {
-                "health_score": None, 
-                "status_operacional": "OFFLINE", 
-                "indicador_led": "#cbd5e1", 
+                "health_score": None,
+                "status_operacional": "OFFLINE",
+                "indicador_led": "#cbd5e1",
                 "recomendacao": "Erro interno no servidor"
             },
-            "telemetria": {"temperatura_atual": 0, "bateria": 0, "historico": []}
+            "telemetria": {"temperatura_atual": 0, "bateria": None, "historico": []}
         }
 
 @app.post("/register")
