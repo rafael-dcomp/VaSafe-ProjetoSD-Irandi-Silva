@@ -9,7 +9,7 @@ import StatCard from './StatCard';
 // Importe seu arquivo CSS aqui
 import '../App.css'; 
 
-const API_URL = "http://98.88.32.2:8000";
+const API_URL = "http://98.90.117.5:8000";
 
 // Cores do Tema (Usadas nas props dos gráficos e cards)
 const THEME = {

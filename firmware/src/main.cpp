@@ -33,7 +33,7 @@ DHT dht(PIN_DHT, DHT11);
 Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1);
 Preferences preferences; 
 
-char mqtt_server[40] = "0.0.0.0";
+char mqtt_server[40] = "98.90.117.5";
 char mqtt_port[6] = "1883";
 char box_id[15] = "box_01";
 
