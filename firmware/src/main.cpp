@@ -24,7 +24,7 @@
 
 const int CAPACIDADE_MEMORIA_MENSAGENS = 400;
 const int LIMITE_LUZ_ALARME = 600;            
-const float LIMITE_VARIACAO_TEMP = 2.0;      
+const float LIMITE_VARIACAO_TEMP = 2.0;       
 
 
 WiFiClient espClient;
@@ -58,7 +58,7 @@ String boxStatus = "AGUARDANDO";
 
 bool forcarSincronizacao = false; 
 
-bool wifiLigado = true;
+bool wifiLigado = true; 
 unsigned long lastConnectionTime = 0;
 float ultimaTempEnviada = -999.0;
 bool modoEmergencia = false; 
@@ -204,7 +204,7 @@ void checkResetButton() {
 void gerenciarConexao(bool precisaSincronizar, bool emergencia, bool comandoSync) {
   if (precisaSincronizar || emergencia || comandoSync) {
     if (!wifiLigado) {
-      Serial.println(">>> LIGANDO WIFI (Hora de Sincronizar) <<<");
+      Serial.println(">>> LIGANDO WIFI (Necessario Sync/Emergencia) <<<");
       WiFi.mode(WIFI_STA); 
       WiFi.begin();        
       wifiLigado = true;
@@ -318,6 +318,12 @@ void setup() {
   int portaInt = atoi(mqtt_port);
   client.setServer(mqtt_server, portaInt);
   client.setCallback(callback);
+
+
+  Serial.println("--- FIM SETUP: Desconectando para iniciar modo economia ---");
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  wifiLigado = false;
 }
 
 void loop() {
@@ -325,7 +331,7 @@ void loop() {
   
   if (wifiLigado) {
     client.loop(); 
-    
+
     if (client.connected() && !offlineBuffer.empty()) {
        Serial.println("--- [SYNC EM ANDAMENTO] ---");
        while (!offlineBuffer.empty() && client.connected()) {
