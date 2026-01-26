@@ -4,11 +4,11 @@ import axios from 'axios';
 const API_URL = "http://98.90.117.5:8000";
 
 const getStatusColor = (score) => {
-  if (score === undefined || score === null) return '#cbd5e1'; // Cinza (Aguardando/sem dado)
-  if (score === 0) return '#000000'; // Preto (Fraude/Violação)
-  if (score >= 90) return '#22c55e'; // Verde (Ótimo)
-  if (score >= 60) return '#eab308'; // Amarelo (Atenção)
-  return '#ef4444'; // Laranja/Vermelho (Risco)
+  if (score === undefined || score === null) return '#cbd5e1'; 
+  if (score === 0) return '#000000'; 
+  if (score >= 90) return '#22c55e'; 
+  if (score >= 60) return '#eab308'; 
+  return '#ef4444'; 
 };
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
@@ -30,19 +30,16 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
             score: analise.health_score ?? null,
             status_operacional: analise.status_operacional ?? null,
             temp: typeof tele.temperatura_atual === 'number' ? tele.temperatura_atual : null,
-            bateria: (tele.hasOwnProperty('bateria') ? tele.bateria : undefined), // pode ser undefined
             violacao: tele?.violacao ?? false,
             tampa_aberta: tele?.tampa_aberta ?? false,
             historico: tele?.historico ?? [],
             erro: false
           };
         } catch (err) {
-          // falha de rede / timeout: marca erro
           novos[item.id] = {
             score: null,
             status_operacional: null,
             temp: null,
-            bateria: undefined,
             violacao: false,
             tampa_aberta: false,
             historico: [],
@@ -64,8 +61,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const renderStatusLabel = (score, status, isErro) => {
     if (isErro) return 'OFFLINE';
     if (status) {
-      // Usa explicitamente o status vindo do backend (ex: AGUARDANDO, FRAUDE, APROVADO...)
-      // Se for AGUARDANDO, mostra isso em vez de 'OFFLINE'
       return status;
     }
     if (score === null || score === undefined) return 'AGUARDANDO';
@@ -76,14 +71,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const formatTemp = (t) =>
     (typeof t === 'number' && !Number.isNaN(t)) ? `${t.toFixed(1)}°C` : '--';
 
-  const formatBattery = (b) =>
-    (typeof b === 'number' && !Number.isNaN(b)) ? `${b}%` : '--';
-
-  const batteryColor = (b) => {
-    if (typeof b !== 'number') return '#1e293b'; // neutro quando undefined/null
-    return b < 20 ? '#ef4444' : '#1e293b';
-  };
-
   return (
     <div className="menu-container">
       <h2 style={{ color: '#1e293b', marginBottom: 20 }}>📦 Visão Geral das Caixas</h2>
@@ -93,8 +80,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
           const dados = resumoEstoque[item.id];
           const score = dados ? dados.score : null;
           const corStatus = getStatusColor(score);
-
-          // Determina "offline/aguardando" com base no status_operacional ou erro real
           const isOfflineOrAguardando = dados?.erro === true
             || dados?.status_operacional === 'AGUARDANDO'
             || dados?.status_operacional === 'OFFLINE';
@@ -122,29 +107,24 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
               </p>
 
               <div className="caixa-stats-row">
-                {/* TEMPERATURA */}
                 <div className="stat-item">
                   <small>Temperatura</small>
                   <strong>
-                    {/* Só mostra temperatura quando não está aguardando/offline */}
                     {!isOfflineOrAguardando && dados && dados.temp !== null
                       ? formatTemp(dados.temp)
                       : '--'}
                   </strong>
                 </div>
-
-                {/* BATERIA */}
+               
                 <div className="stat-item">
-                  <small>Bateria</small>
-                  <strong style={{ color: batteryColor(dados?.bateria) }}>
-                    {/* Bateria pode ser undefined (pc alimentando) -> mostra -- */}
-                    {!isOfflineOrAguardando && dados && typeof dados.bateria === 'number'
-                      ? formatBattery(dados.bateria)
+                  <small>Saúde</small>
+                  <strong style={{ color: corStatus }}>
+                    {!isOfflineOrAguardando && score !== null
+                      ? `${score}%`
                       : '--'}
                   </strong>
                 </div>
 
-                {/* ID */}
                 <div className="stat-item">
                   <small>ID</small>
                   <span style={{ fontSize: '0.8rem' }}>{item.id}</span>

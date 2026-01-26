@@ -389,7 +389,6 @@ void loop() {
         doc["box_id"] = box_id;
         doc["temperatura"] = temp; 
         doc["luz"] = luz;
-        doc["bateria"] = bateriaPct;
         doc["aberta"] = caixaViolada; 
         
         if (modoEmergencia) doc["alerta"] = "EVENTO_CRITICO"; 
