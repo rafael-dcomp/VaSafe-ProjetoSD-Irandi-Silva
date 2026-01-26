@@ -3,15 +3,15 @@ import json
 import time
 import random
 
-
 MQTT_BROKER = "98.90.117.5"
 MQTT_PORT = 1883
 TOPIC_BASE = "vasafe/"
 TOPIC_CONFIG = "vasafe/setup/qtd"  
 
 QTD_TOTAL_CAIXAS = 30 
-INICIO_ID = 2  
+INICIO_ID = 2 
 
+print(f"\n--- INICIANDO SIMULADOR V4 (CONTROLÁVEL VIA MQTT) ---")
 print(f"--- Aguardando comandos no tópico: {TOPIC_CONFIG} ---")
 print(f"--- Qtd Atual: {QTD_TOTAL_CAIXAS} caixas ---")
 
@@ -22,7 +22,7 @@ def on_message(client, userdata, msg):
     try:
         if msg.topic == TOPIC_CONFIG:
             novo_valor = int(msg.payload.decode())
-            if novo_valor > 0 and novo_valor <= 200: # Limite de segurança
+            if novo_valor > 0 and novo_valor <= 200: 
                 QTD_TOTAL_CAIXAS = novo_valor
                 print(f"\nCOMANDO RECEBIDO: Atualizando para {QTD_TOTAL_CAIXAS} caixas!\n")
             else:
@@ -98,8 +98,10 @@ def gerar_dados_normal(box_id):
 
 try:
     while True:
-        qtd_atual = QTD_TOTAL_CAIXAS      
-        print(f"\n--- Enviando para {qtd_atual} Caixas ({time.strftime('%H:%M:%S')}) ---")   
+        qtd_atual = QTD_TOTAL_CAIXAS 
+        
+        print(f"\n--- Enviando para {qtd_atual} Caixas ({time.strftime('%H:%M:%S')}) ---")
+        
         for i in range(INICIO_ID, qtd_atual + 1):
 
             suffix = f"0{i}" if i < 10 else str(i)
@@ -108,6 +110,7 @@ try:
             
             payload = {}
             msg_log = ""
+
             if i == 2:
                 payload, desc = gerar_dados_drama(box_id)
                 msg_log = f"[{box_id}] {desc} | T:{payload['temperatura']}°C"
@@ -126,7 +129,7 @@ try:
 
             client.publish(topic, json.dumps(payload))
             print(msg_log)
-            
+    
             delay = 0.05 if qtd_atual < 50 else 0.01
             time.sleep(delay)
 

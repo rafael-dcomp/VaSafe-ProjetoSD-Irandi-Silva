@@ -55,17 +55,16 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
   return (
     <div className="menu-container">
-      <h2 style={{ color: '#1e293b', marginBottom: 20 }}>📦 Visão Geral das Caixas</h2>
+      <h2 style={{ color: '#1e293b', marginBottom: 20 }}>Visão Geral dos Lotes</h2>
 
       <div className="caixa-grid">
         {(estoqueConfig || []).map((item) => {
           const dados = resumoEstoque[item.id];
           const score = dados ? dados.score : null;
-          
-          // --- LÓGICA NOVA INJETADA AQUI (MANTENDO O RESTO IGUAL) ---
-          let corStatus = '#cbd5e1'; // Padrão Cinza
+
+          let corStatus = '#cbd5e1'; 
           let statusLabel = 'AGUARDANDO';
-          let classeAnimacao = 'status-offline'; // Classe CSS padrão
+          let classeAnimacao = 'status-offline';
           let icone = '❄️';
 
           if (!dados || dados.erro || dados.status_operacional === 'OFFLINE') {
@@ -74,15 +73,14 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
              classeAnimacao = 'status-offline';
              icone = '📡';
           } else if (dados.violacao || dados.tampa_aberta) {
-             // 1. Prioridade Vermelho (Violação)
              corStatus = '#ef4444';
              statusLabel = 'VIOLAÇÃO';
              classeAnimacao = 'status-danger';
              icone = '🚨';
           } else if (dados.temp !== null && (dados.temp < 2.0 || dados.temp > 8.0)) {
-             // 2. Prioridade Amarelo (Temperatura)
+
              corStatus = '#eab308';
-             statusLabel = 'ALERTA TEMP';
+             statusLabel = 'ALERTA';
              classeAnimacao = 'status-warning';
              icone = '⚠️';
           } else {
@@ -100,7 +98,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
           return (
             <div
               key={item.id}
-              // Adicionei a classeAnimacao aqui para pegar o CSS do amarelo/vermelho
               className={`caixa-card ${classeAnimacao}`}
               onClick={() => onSelectCaixa(item.id)}
               style={{ borderTop: `6px solid ${corStatus}` }}
@@ -132,7 +129,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                 
                 <div className="stat-item">
                   <small>Status</small>
-                  {/* Usa a cor calculada dinamicamente */}
                   <strong style={{ color: corStatus }}>
                     {statusLabel}
                   </strong>
