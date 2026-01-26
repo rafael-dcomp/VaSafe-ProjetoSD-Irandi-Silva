@@ -16,7 +16,7 @@ export default function Header({ onLogout }) {
           src="/vite.svg" 
           alt="Ícone VaSafe" 
           style={{ 
-            height: '35px', 
+            height: '70px', 
             width: 'auto' 
           }} 
         />

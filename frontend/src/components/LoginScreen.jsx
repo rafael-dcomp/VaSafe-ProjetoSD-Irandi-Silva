@@ -41,16 +41,16 @@ export default function LoginScreen({ onLoginSuccess }) {
             src={completo} 
             alt="VaSafe Logo" 
             style={{ 
-              height: '70px',
+              height: '140px',
               width: 'auto',  
               objectFit: 'contain' 
             }} 
           />
         </div>
 
-        <h2 style={{ marginBottom: '5px' }}>Acesso Restrito</h2>
+        <h2 style={{ marginBottom: '5px' }}>Login</h2>
         <p style={{ color: '#666', marginBottom: '25px', fontSize: '0.9rem' }}>
-          Gestão de Caixas Térmicas
+          Monitoramento Inteligente da Cadeia dos Frios
         </p>
         
         <form onSubmit={handleLogin}>
