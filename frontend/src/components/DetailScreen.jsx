@@ -61,24 +61,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
     return () => clearInterval(interval);
   }, [fetchDetalhe]);
 
-  const handleSyncClick = async () => {
-    setSyncing(true);
-    try {
-      await axios.post(`${API_URL}/comando`, {
-        box_id: caixaId,
-        comando: "SYNC"
-      });
-      console.log("Comando de SYNC enviado. Aguardando resposta...");
-      await new Promise(resolve => setTimeout(resolve, 3000));
-      await fetchDetalhe();
-    } catch (e) {
-      console.error("Erro ao solicitar sincronização:", e);
-      alert("Erro ao enviar comando de sincronização.");
-    } finally {
-      setSyncing(false);
-    }
-  };
-
   if (!analise) {
     return (
       <div className="detail-wrapper loading-state">
@@ -136,14 +118,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
             </span>
           </div>
         </div>
-
-        <button 
-          className={`btn-sync ${syncing ? 'spinning' : ''}`} 
-          onClick={handleSyncClick}
-          disabled={syncing}
-        >
-          {syncing ? '↻' : '↻ Sincronizar'}
-        </button>
       </div>
 
       <div className="status-banner" style={{ borderLeft: `6px solid ${getHeaderColor()}` }}>

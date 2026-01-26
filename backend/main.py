@@ -20,7 +20,7 @@ app.add_middleware(
 )
 
 # Configurações de Ambiente
-MQTT_BROKER = os.getenv("MQTT_BROKER", "98.90.117.5") # Atualizei com o IP que estava no seu Arduino
+MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
 INFLUX_TOKEN = os.getenv("INFLUX_TOKEN", os.getenv("DOCKER_INFLUXDB_INIT_ADMIN_TOKEN", "token-secreto"))
@@ -36,10 +36,10 @@ query_api = influx_client.query_api()
 # Setup MQTT
 mqtt_client = mqtt.Client(client_id="vasafe-backend", protocol=mqtt.MQTTv311)
 
-# Funções Auxiliares de Usuário
+# Funções Auxiliares de Usuário (Simples baseada em arquivo)
 def load_users():
     if not os.path.exists(USERS_FILE):
-        return {"admin": "admin"} 
+        return {"admin": "admin"} # Usuário padrão
     try:
         with open(USERS_FILE, 'r') as f:
             return json.load(f)
@@ -64,15 +64,14 @@ def calcular_saude_lote(historico):
     violacao_detectada = False
 
     for p in historico:
-        temp = p.get("temperatura", 0)
-        aberta = p.get("tampa_aberta", False)
-        # Se tiver luz no histórico, podemos usar também, mas manteremos simples
-        
+        temp = p["temperatura"]
+        aberta = p["tampa_aberta"]
+
         if temp > 8 or temp < 2:
             saude -= 20
         if aberta:
             saude -= 5
-        if p.get("violacao", False):
+        if p["violacao"]:
             violacao_detectada = True
             saude = 0
             break
@@ -88,7 +87,7 @@ def calcular_saude_lote(historico):
     else:
         return saude, "CRITICO", "#ef4444", "Risco biológico!"
 
-# --- MUDANÇA PRINCIPAL AQUI (Callbacks MQTT) ---
+# Callbacks MQTT
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ MQTT conectado")
@@ -99,31 +98,19 @@ def on_connect(client, userdata, flags, rc):
 def on_message(client, userdata, msg):
     try:
         payload = json.loads(msg.payload.decode())
-        print("📥 MQTT Recebido:", payload)
+        print("📥 MQTT:", payload)
 
-        # Extração dos dados vindos do Arduino
         box_id = payload.get("box_id", "unknown")
         temperatura = float(payload.get("temperatura", 0))
         tampa_aberta = bool(payload.get("aberta", False))
-        
-        # Novos campos adicionados no Arduino
-        luz = int(payload.get("luz", 0))
-        tipo_envio = payload.get("tipo", "AUTO") # "SYNC_MANUAL" ou vazio
-        alerta_msg = payload.get("alerta", "NORMAL")
+        violacao = temperatura > 8 or temperatura < 2
 
-        # Verifica violação (temperatura ou tampa violada pelo LDR)
-        violacao = (temperatura > 8 or temperatura < 2) or (luz < 600)
-
-        # Cria o ponto para o InfluxDB com TODOS os dados
         point = (
             Point("telemetria")
             .tag("lote", box_id)
-            .tag("tipo_envio", tipo_envio) # Tag para filtrar se foi botão
             .field("temperatura", temperatura)
-            .field("luz", luz)             # Campo novo
             .field("tampa_aberta", tampa_aberta)
             .field("violacao", violacao)
-            .field("msg_alerta", alerta_msg) # Campo novo
             .time(datetime.utcnow())
         )
 
@@ -140,8 +127,7 @@ def iniciar_mqtt():
         try:
             mqtt_client.connect(MQTT_BROKER, MQTT_PORT, 60)
             mqtt_client.loop_forever()
-        except Exception as e:
-            print(f"Tentando reconectar MQTT... Erro: {e}")
+        except Exception:
             time.sleep(5)
 
 @app.on_event("startup")
@@ -177,7 +163,6 @@ def login(dados: dict):
 
 @app.get("/analise/{lote}")
 def analise_lote(lote: str):
-    # Query ajustada para garantir que pegamos os campos certos
     query = f'''
     from(bucket: "{INFLUX_BUCKET}")
       |> range(start: -24h)
@@ -193,18 +178,14 @@ def analise_lote(lote: str):
         historico = []
         for table in result:
             for r in table.records:
-                # O Influx retorna None se o campo não existir naquele registro
                 historico.append({
                     "time": r.get_time(),
-                    "temperatura": float(r["temperatura"]) if "temperatura" in r else 0.0,
-                    "luz": int(r["luz"]) if "luz" in r else 0, # Adicionado LUZ
-                    "tampa_aberta": bool(r["tampa_aberta"]) if "tampa_aberta" in r else False,
-                    "violacao": bool(r["violacao"]) if "violacao" in r else False
+                    "temperatura": float(r["temperatura"]),
+                    "tampa_aberta": bool(r["tampa_aberta"]),
+                    "violacao": bool(r["violacao"])
                 })
 
         temperatura_atual = historico[0]["temperatura"] if historico else 0.0
-        luz_atual = historico[0]["luz"] if historico and "luz" in historico[0] else 0
-        
         saude, status, cor, msg = calcular_saude_lote(historico)
 
         return {
@@ -217,7 +198,6 @@ def analise_lote(lote: str):
             },
             "telemetria": {
                 "temperatura_atual": round(temperatura_atual, 1),
-                "luz_atual": luz_atual,
                 "violacao": historico[0]["violacao"] if historico else False,
                 "tampa_aberta": historico[0]["tampa_aberta"] if historico else False,
                 "historico": historico
@@ -230,7 +210,7 @@ def analise_lote(lote: str):
             "lote": lote,
             "analise_risco": {
                 "health_score": 0, "status_operacional": "OFFLINE", 
-                "indicador_led": "#808080", "recomendacao": "Erro interno ou Sem Dados"
+                "indicador_led": "#808080", "recomendacao": "Erro interno"
             },
             "telemetria": {"temperatura_atual": 0, "historico": []}
         }
