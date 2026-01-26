@@ -136,13 +136,15 @@ void callback(char* topic, byte* payload, unsigned int length) {
   String message;
   for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
   
+  Serial.print("MSG MQTT: "); Serial.println(message);
+
   StaticJsonDocument<256> doc;
   DeserializationError error = deserializeJson(doc, message);
 
   if (!error) {
     if (doc.containsKey("status_operacional")) {
         boxStatus = doc["status_operacional"].as<String>();
-        Serial.print("Status recebido: "); Serial.println(boxStatus);
+        Serial.print("Status: "); Serial.println(boxStatus);
     } 
     
     if (doc.containsKey("comando")) {
@@ -171,10 +173,11 @@ void atualizarHardware(bool online, bool erroSensor, int luz) {
   }
   else if (online) {
     if (forcarSincronizacao) {
+        // Pisca VERDE rápido indicando Sync Manual
         if ((currentMillis / 100) % 2 == 0) setRGB(0, 1, 0);
         else setRGB(0, 0, 0);
     } else {
-        setRGB(0, 1, 0);
+        setRGB(0, 1, 0); // Verde fixo online
     }
   }
   else {
@@ -247,7 +250,7 @@ void setup() {
   dht.begin();
 
   preferences.begin("vasafe_cfg", false);
-  String saved_server = preferences.getString("server", "0.0.0.0");
+  String saved_server = preferences.getString("server", "98.90.117.5");
   String saved_port   = preferences.getString("port", "1883");
   String saved_id     = preferences.getString("boxid", "box_01");
   String saved_dur    = preferences.getString("duration", "3");
@@ -332,22 +335,23 @@ void loop() {
   if (wifiLigado) {
     client.loop(); 
 
-    if (client.connected() && !offlineBuffer.empty()) {
-       Serial.println("--- [SYNC EM ANDAMENTO] ---");
+    if (client.connected() && (!offlineBuffer.empty() || forcarSincronizacao)) {
+       
        while (!offlineBuffer.empty() && client.connected()) {
           String msg = offlineBuffer.front(); 
-          Serial.print(">> Upload: "); Serial.println(msg); 
+          Serial.print(">> Upload Sync: "); Serial.println(msg); 
           
           client.publish(topicTelemetria.c_str(), msg.c_str());
           offlineBuffer.erase(offlineBuffer.begin());
           client.loop(); 
-          delay(50);     
+          delay(50); 
        }
        lastSync = millis(); 
        
        if (offlineBuffer.empty() && forcarSincronizacao) {
-           Serial.println("Comando Sync Concluido!");
-           forcarSincronizacao = false;
+           Serial.println("--- SYNC MANUAL CONCLUIDO ---");
+           delay(200); 
+           forcarSincronizacao = false; 
        }
     }
   }
@@ -370,6 +374,7 @@ void loop() {
       bool caixaViolada = (luz < LIMITE_LUZ_ALARME);
       bool variacaoBrusca = (!erroSensor && abs(temp - ultimaTempEnviada) > LIMITE_VARIACAO_TEMP && ultimaTempEnviada != -999.0);
       modoEmergencia = (caixaViolada || variacaoBrusca);
+      
       bool emergenciaValida = (modoEmergencia && (now - lastMsgEmergencia > 5000));
 
       bool horaDeMedir = (now - lastMedicao > intervaloMedicaoReal);     
@@ -394,6 +399,7 @@ void loop() {
         StaticJsonDocument<256> doc;
         doc["box_id"] = box_id;
         doc["temperatura"] = temp; 
+        doc["luz"] = luz;
         doc["aberta"] = caixaViolada; 
         
         if (modoEmergencia) doc["alerta"] = "EVENTO_CRITICO"; 

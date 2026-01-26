@@ -64,9 +64,18 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
   const handleSyncClick = async () => {
     setSyncing(true);
     try {
+      await axios.post(`${API_URL}/comando`, {
+        box_id: caixaId,
+        comando: "SYNC"
+      });
+      console.log("Comando de SYNC enviado. Aguardando resposta...");
+      await new Promise(resolve => setTimeout(resolve, 3000));
       await fetchDetalhe();
+    } catch (e) {
+      console.error("Erro ao solicitar sincronização:", e);
+      alert("Erro ao enviar comando de sincronização.");
     } finally {
-      setTimeout(() => setSyncing(false), 600);
+      setSyncing(false);
     }
   };
 
