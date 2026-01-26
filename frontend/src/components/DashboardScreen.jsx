@@ -3,14 +3,6 @@ import axios from 'axios';
 
 const API_URL = "http://98.90.117.5:8000";
 
-const getStatusColor = (score) => {
-  if (score === undefined || score === null) return '#cbd5e1'; 
-  if (score === 0) return '#000000'; 
-  if (score >= 90) return '#22c55e'; 
-  if (score >= 60) return '#eab308'; 
-  return '#ef4444'; 
-};
-
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({});
 
@@ -58,16 +50,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     return () => clearInterval(id);
   }, [fetchVisaoGeral]);
 
-  const renderStatusLabel = (score, status, isErro) => {
-    if (isErro) return 'OFFLINE';
-    if (status) {
-      return status;
-    }
-    if (score === null || score === undefined) return 'AGUARDANDO';
-    if (score === 0) return 'FRAUDE';
-    return `${score}% Saúde`;
-  };
-
   const formatTemp = (t) =>
     (typeof t === 'number' && !Number.isNaN(t)) ? `${t.toFixed(1)}°C` : '--';
 
@@ -79,25 +61,57 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         {(estoqueConfig || []).map((item) => {
           const dados = resumoEstoque[item.id];
           const score = dados ? dados.score : null;
-          const corStatus = getStatusColor(score);
-          const isOfflineOrAguardando = dados?.erro === true
-            || dados?.status_operacional === 'AGUARDANDO'
+          
+          // --- LÓGICA NOVA INJETADA AQUI (MANTENDO O RESTO IGUAL) ---
+          let corStatus = '#cbd5e1'; // Padrão Cinza
+          let statusLabel = 'AGUARDANDO';
+          let classeAnimacao = 'status-offline'; // Classe CSS padrão
+          let icone = '❄️';
+
+          if (!dados || dados.erro || dados.status_operacional === 'OFFLINE') {
+             corStatus = '#94a3b8';
+             statusLabel = 'OFFLINE';
+             classeAnimacao = 'status-offline';
+             icone = '📡';
+          } else if (dados.violacao || dados.tampa_aberta) {
+             // 1. Prioridade Vermelho (Violação)
+             corStatus = '#ef4444';
+             statusLabel = 'VIOLAÇÃO';
+             classeAnimacao = 'status-danger';
+             icone = '🚨';
+          } else if (dados.temp !== null && (dados.temp < 2.0 || dados.temp > 8.0)) {
+             // 2. Prioridade Amarelo (Temperatura)
+             corStatus = '#eab308';
+             statusLabel = 'ALERTA TEMP';
+             classeAnimacao = 'status-warning';
+             icone = '⚠️';
+          } else {
+             // 3. Normal (Verde)
+             corStatus = '#22c55e';
+             statusLabel = score !== null ? `${score}% Saúde` : 'ESTÁVEL';
+             classeAnimacao = 'status-ok';
+             icone = '❄️';
+          }
+
+          const isOfflineOrAguardando = dados?.erro === true 
+            || dados?.status_operacional === 'AGUARDANDO' 
             || dados?.status_operacional === 'OFFLINE';
 
           return (
             <div
               key={item.id}
-              className="caixa-card"
+              // Adicionei a classeAnimacao aqui para pegar o CSS do amarelo/vermelho
+              className={`caixa-card ${classeAnimacao}`}
               onClick={() => onSelectCaixa(item.id)}
               style={{ borderTop: `6px solid ${corStatus}` }}
             >
               <div className="caixa-header">
                 <div className="icon-bg" style={{ backgroundColor: corStatus + '20' }}>
-                  <span style={{ fontSize: 20 }}>{score === 0 ? '⚠️' : '❄️'}</span>
+                  <span style={{ fontSize: 20 }}>{icone}</span>
                 </div>
 
                 <span className="status-pill" style={{ backgroundColor: corStatus, color: '#fff' }}>
-                  {renderStatusLabel(score, dados?.status_operacional, dados?.erro)}
+                  {statusLabel}
                 </span>
               </div>
 
@@ -115,13 +129,12 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                       : '--'}
                   </strong>
                 </div>
-               
+                
                 <div className="stat-item">
-                  <small>Saúde</small>
+                  <small>Status</small>
+                  {/* Usa a cor calculada dinamicamente */}
                   <strong style={{ color: corStatus }}>
-                    {!isOfflineOrAguardando && score !== null
-                      ? `${score}%`
-                      : '--'}
+                    {statusLabel}
                   </strong>
                 </div>
 

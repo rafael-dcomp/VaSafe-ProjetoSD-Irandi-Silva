@@ -19,7 +19,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Configurações de Ambiente
 MQTT_BROKER = os.getenv("MQTT_BROKER", "mosquitto")
 MQTT_PORT = int(os.getenv("MQTT_PORT", 1883))
 INFLUX_URL = os.getenv("INFLUX_URL", "http://influxdb:8086")
@@ -28,18 +27,15 @@ INFLUX_ORG = os.getenv("INFLUX_ORG", "ufsvasafe")
 INFLUX_BUCKET = os.getenv("INFLUX_BUCKET", "telemetria")
 USERS_FILE = "users.json"
 
-# Setup InfluxDB
 influx_client = InfluxDBClient(url=INFLUX_URL, token=INFLUX_TOKEN, org=INFLUX_ORG, timeout=20000)
 write_api = influx_client.write_api(write_options=SYNCHRONOUS)
 query_api = influx_client.query_api()
 
-# Setup MQTT
 mqtt_client = mqtt.Client(client_id="vasafe-backend", protocol=mqtt.MQTTv311)
 
-# Funções Auxiliares de Usuário (Simples baseada em arquivo)
 def load_users():
     if not os.path.exists(USERS_FILE):
-        return {"admin": "admin"} # Usuário padrão
+        return {"admin": "admin"} 
     try:
         with open(USERS_FILE, 'r') as f:
             return json.load(f)
@@ -55,7 +51,6 @@ def save_new_user(usuario, senha):
         json.dump(users, f)
     return True
 
-# Lógica de Saúde do Lote
 def calcular_saude_lote(historico):
     if not historico:
         return 0, "AGUARDANDO", "#808080", "Aguardando dados..."
@@ -87,7 +82,6 @@ def calcular_saude_lote(historico):
     else:
         return saude, "CRITICO", "#ef4444", "Risco biológico!"
 
-# Callbacks MQTT
 def on_connect(client, userdata, flags, rc):
     if rc == 0:
         print("✅ MQTT conectado")
@@ -133,8 +127,6 @@ def iniciar_mqtt():
 @app.on_event("startup")
 def startup():
     threading.Thread(target=iniciar_mqtt, daemon=True).start()
-
-# --- ENDPOINTS ---
 
 @app.post("/register")
 def register(dados: dict):

@@ -1,7 +1,6 @@
 import { useState } from 'react';
 
 export default function SetupScreen({ onConfirmarConfiguracao }) {
-  // Estados do formulário
   const [quantidade, setQuantidade] = useState(20);
   const [nomeLote, setNomeLote] = useState('Lote Simulado');
   const [conteudo, setConteudo] = useState('Dados Virtuais');
@@ -10,24 +9,18 @@ export default function SetupScreen({ onConfirmarConfiguracao }) {
   const handleGerar = (e) => {
     e.preventDefault();
 
-    // --- 1. CRIAR A CAIXA REAL (ESP32) ---
-    // Esta é a caixa que vai receber os dados reais do seu sensor
     const caixaReal = {
       id: 'box_01',
-      nome: '⭐ ESP32 FÍSICA',
+      nome: 'ESP32 FÍSICA',
       conteudo: 'Sensor DHT11 Real',
       local: 'Minha Bancada',
       status: 'AGUARDANDO'
     };
 
-    // Começamos a lista com a caixa real
     const novasCaixas = [caixaReal];
 
-    // --- 2. GERAR AS CAIXAS SIMULADAS ---
-    // O loop começa em 2 para não sobrescrever a box_01
     for (let i = 2; i <= quantidade; i++) {
-      
-      // Formatação: box_02, box_03, ..., box_10, etc.
+
       const numeroFormatado = i < 10 ? `0${i}` : i;
       const idGerado = `box_${numeroFormatado}`;
 
@@ -42,7 +35,6 @@ export default function SetupScreen({ onConfirmarConfiguracao }) {
 
     console.log(`Ambiente gerado: 1 Real + ${novasCaixas.length - 1} Simuladas.`);
     
-    // Envia a lista completa para o App.jsx
     onConfirmarConfiguracao(novasCaixas);
   };
 
@@ -60,7 +52,6 @@ export default function SetupScreen({ onConfirmarConfiguracao }) {
 
         <form onSubmit={handleGerar} className="setup-form">
           
-          {/* Campo Quantidade Total */}
           <div className="form-group">
             <label>Quantidade TOTAL de Caixas:</label>
             <input 
@@ -76,8 +67,6 @@ export default function SetupScreen({ onConfirmarConfiguracao }) {
               Isso criará a caixa real + {quantidade - 1} caixas virtuais.
             </small>
           </div>
-
-          {/* Campos de Detalhes (Lado a Lado) */}
           <div className="form-row">
             <div className="form-group">
                <label>Nome do Lote Virtual:</label>
@@ -101,7 +90,6 @@ export default function SetupScreen({ onConfirmarConfiguracao }) {
             </div>
           </div>
 
-          {/* Campo Local */}
           <div className="form-group">
             <label>Local Virtual:</label>
             <input 
