@@ -13,7 +13,7 @@ export default function Header({ onLogout }) {
       <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
         
         <img 
-          src="/icone.svg" 
+          src="/vite.svg" 
           alt="Ícone VaSafe" 
           style={{ 
             height: '35px', 
