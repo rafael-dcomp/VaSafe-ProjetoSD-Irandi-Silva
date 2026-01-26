@@ -394,7 +394,6 @@ void loop() {
         StaticJsonDocument<256> doc;
         doc["box_id"] = box_id;
         doc["temperatura"] = temp; 
-        doc["luz"] = luz;
         doc["aberta"] = caixaViolada; 
         
         if (modoEmergencia) doc["alerta"] = "EVENTO_CRITICO"; 

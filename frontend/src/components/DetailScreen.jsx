@@ -6,12 +6,10 @@ import {
 import StatusBadge from './StatusBadge';
 import StatCard from './StatCard';
 
-// Importe seu arquivo CSS aqui
 import '../App.css'; 
 
 const API_URL = "http://98.90.117.5:8000";
 
-// Cores do Tema (Usadas nas props dos gráficos e cards)
 const THEME = {
   primary: '#3b82f6',
   danger: '#ef4444',
@@ -22,7 +20,6 @@ const THEME = {
   textMuted: '#94a3b8'
 };
 
-// Componente de Tooltip Personalizado
 const CustomTooltip = ({ active, payload, label }) => {
   if (active && payload && payload.length) {
     return (
@@ -82,7 +79,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
     );
   }
 
-  // --- Processamento de Dados ---
   const telemetria = analise.telemetria ?? {};
   const analise_risco = analise.analise_risco ?? {};
 
@@ -96,7 +92,7 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
     .map(d => ({
       ...d,
       temperatura: d.temperatura ? Number(d.temperatura) : null,
-      tampa_aberta: d.tampa_aberta ? 1 : 0, // 1 = Aberta, 0 = Fechada
+      tampa_aberta: d.tampa_aberta ? 1 : 0, 
       timeObj: d.time ? new Date(d.time) : null
     }))
     .filter(d => d.timeObj)
@@ -118,7 +114,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
 
   return (
     <div className="detail-wrapper fadeIn">
-      {/* --- Header / Controles --- */}
       <div className="controls-area">
         <div className="header-left">
           <button className="btn-voltar" onClick={onVoltar}>
@@ -142,7 +137,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
         </button>
       </div>
 
-      {/* --- Status Banner --- */}
       <div className="status-banner" style={{ borderLeft: `6px solid ${getHeaderColor()}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
           <h2 style={{ color: getHeaderColor(), margin: 0 }}>
@@ -160,7 +154,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
         />
       </div>
 
-      {/* --- Grid de Cards --- */}
       <div className="stats-grid">
         <StatCard
           titulo="Saúde"
@@ -177,13 +170,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
           icon="❄️"
         />
         <StatCard
-          titulo="Bateria"
-          valor={displayBattery(telemetria.bateria)}
-          unidade=""
-          cor={telemetria.bateria < 20 ? THEME.danger : THEME.dark}
-          icon="🔋"
-        />
-        <StatCard
           titulo="Segurança"
           valor={isViolado ? 'CRÍTICO' : (isAberta ? 'ALERTA' : 'OK')}
           unidade=""
@@ -192,7 +178,6 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
         />
       </div>
 
-      {/* --- Gráfico --- */}
       <div className="chart-panel">
         <div className="chart-header">
           <h3>Histórico Recente</h3>
