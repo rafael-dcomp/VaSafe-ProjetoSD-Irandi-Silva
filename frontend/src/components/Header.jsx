@@ -10,7 +10,7 @@ export default function Header({ onLogout }) {
       backgroundColor: '#fff', 
       borderBottom: '1px solid #e2e8f0' 
     }}>
-      <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+      <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
         
         <img 
           src="/vite.svg" 
