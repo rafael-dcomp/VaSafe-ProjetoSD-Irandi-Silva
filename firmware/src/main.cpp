@@ -134,27 +134,23 @@ void drawScreen(float temp, int luz, int bufferSize, bool wifiOn, bool erro, int
 }
 
 void callback(char* topic, byte* payload, unsigned int length) {
-  String message;
-  for (unsigned int i = 0; i < length; i++) message += (char)payload[i];
-  
-  StaticJsonDocument<256> doc;
-  DeserializationError error = deserializeJson(doc, message);
-
-  if (!error) {
-    if (doc.containsKey("comando")) {
-        String cmd = doc["comando"].as<String>();
-
-        if (cmd == "MANUTENCAO_ON") {
-            Serial.println("!!! MODO MANUTENCAO ATIVADO: WIFI FICARA LIGADO !!!");
-            modoManutencao = true;
-            setRGB(1, 0, 0); 
-        }
-        else if (cmd == "MANUTENCAO_OFF") {
-            Serial.println("!!! MODO MANUTENCAO DESATIVADO: VOLTANDO A ECONOMIA !!!");
-            modoManutencao = false;
-        }
-    }
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
   }
+  
+  Serial.print("--- [COMANDO RECEBIDO] --- ");
+  Serial.println(message);
+  if (message.indexOf("MANUTENCAO_ON") >= 0) {
+      Serial.println("!!! MODO MANUTENCAO ATIVADO: WIFI FICARA LIGADO !!!");
+      modoManutencao = true;
+      setRGB(1, 0, 0); 
+  }
+  else if (message.indexOf("MANUTENCAO_OFF") >= 0) {
+      Serial.println("!!! MODO MANUTENCAO DESATIVADO: VOLTANDO A ECONOMIA !!!");
+      modoManutencao = false;
+      setRGB(0, 0, 0); 
+}
 }
 
 void atualizarHardware(bool online, bool erroSensor, int luz) {
