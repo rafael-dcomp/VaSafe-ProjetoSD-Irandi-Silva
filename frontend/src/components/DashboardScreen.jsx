@@ -5,6 +5,7 @@ const API_URL = "http://98.90.117.5:8000";
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({});
+  const [manualOverrides, setManualOverrides] = useState({});
 
   const styles = {
     switchContainer: {
@@ -49,6 +50,14 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     const comando = estadoAtualOn ? "MANUTENCAO_OFF" : "MANUTENCAO_ON";
     const novoStatus = !estadoAtualOn;
 
+    setManualOverrides(prev => ({
+        ...prev,
+        [boxId]: {
+            active: novoStatus,
+            expires: Date.now() + 30000 
+        }
+    }));
+
     setResumoEstoque(prev => ({
       ...prev,
       [boxId]: {
@@ -59,9 +68,15 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
     try {
       await axios.post(`${API_URL}/controle/${boxId}`, { comando });
+      console.log(`Comando ${comando} enviado com sucesso.`);
     } catch (error) {
       console.error("Erro ao enviar comando", error);
       alert("Erro de conexão. O comando não foi enviado.");
+      setManualOverrides(prev => {
+          const copy = { ...prev };
+          delete copy[boxId];
+          return copy;
+      });
       setResumoEstoque(prev => ({
         ...prev,
         [boxId]: { ...prev[boxId], emManutencao: estadoAtualOn }
@@ -80,34 +95,43 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
           const analise = res.data?.analise_risco ?? {};
           const tele = res.data?.telemetria ?? {};
           const ultimoDado = tele.historico && tele.historico.length > 0 ? tele.historico[0] : {};
-          const modoRemotoAtivo = ultimoDado.modo === "MANUTENCAO_ONLINE"; 
+          const modoBackendAtivo = ultimoDado.modo === "MANUTENCAO_ONLINE"; 
+          let statusFinalSwitch = modoBackendAtivo;
+          
+          if (manualOverrides[item.id]) {
+              if (Date.now() < manualOverrides[item.id].expires) {
+                  statusFinalSwitch = manualOverrides[item.id].active;
+              } else {
+              }
+          }
 
           novos[item.id] = {
             score: analise.health_score ?? null,
             status_operacional: analise.status_operacional ?? null,
-            temp: typeof tele.temperatura_atual === 'number' ? tele.temperatura_atual : null,
+            temp: typeof tele.temperatura_atual === 'number' ? tele.temperatura_atual : null, 
             violacao: tele?.violacao ?? false,
             tampa_aberta: tele?.tampa_aberta ?? false,
             historico: tele?.historico ?? [],
             erro: false,
-            emManutencao: resumoEstoque[item.id]?.emManutencao || modoRemotoAtivo || false
+            emManutencao: statusFinalSwitch 
           };
         } catch (err) {
+          const statusAtual = resumoEstoque[item.id]?.emManutencao || false;
           novos[item.id] = {
             score: null, status_operacional: null, temp: null, violacao: false, tampa_aberta: false, historico: [], erro: true,
-            emManutencao: resumoEstoque[item.id]?.emManutencao || false
+            emManutencao: statusAtual
           };
         }
       })
     );
     setResumoEstoque(novos);
-  }, [estoqueConfig, resumoEstoque]);
+  }, [estoqueConfig, manualOverrides, resumoEstoque]);
 
   useEffect(() => {
     fetchVisaoGeral();
-    const id = setInterval(fetchVisaoGeral, 3000);
+    const id = setInterval(fetchVisaoGeral, 3000); 
     return () => clearInterval(id);
-  }, []);
+  }, [fetchVisaoGeral]);
 
   const formatTemp = (t) => (typeof t === 'number' && !Number.isNaN(t)) ? `${t.toFixed(1)}°C` : '--';
 
@@ -163,6 +187,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                   <strong style={{ color: corStatus }}>{statusLabel}</strong>
                 </div>
               </div>
+
               <div style={{ 
                   marginTop: 20, 
                   backgroundColor: '#f8fafc',
