@@ -21,12 +21,16 @@
 #define PIN_CONFIG_BTN 0   
 #define PIN_BATTERY    35  
 
-
 const int CAPACIDADE_MEMORIA_MENSAGENS = 400;
 const int LIMITE_LUZ_ALARME = 600;            
 const float LIMITE_VARIACAO_TEMP = 2.0;      
-bool modoManutencao = false; // Se true, não desliga o WiFi 
 
+bool modoManutencao = false; 
+bool wifiLigado = true; 
+bool forcarSincronizacao = false; 
+bool modoEmergencia = false;
+bool ledState = LOW;
+bool shouldSaveConfig = false;
 
 WiFiClient espClient;
 PubSubClient client(espClient);
@@ -37,7 +41,6 @@ Preferences preferences;
 char mqtt_server[40] = "98.90.117.5";
 char mqtt_port[6] = "1883";
 char box_id[15] = "box_01";
-
 char config_duracao[6] = "3";   
 char config_sync_min[6] = "5";   
 
@@ -51,46 +54,51 @@ std::vector<String> offlineBuffer;
 unsigned long lastMedicao = 0;       
 unsigned long lastSync = 0;         
 unsigned long lastMsgEmergencia = 0; 
-
 unsigned long intervaloMedicaoReal = 0;     
 unsigned long intervaloSincronizacaoReal = 0; 
-
-String boxStatus = "AGUARDANDO"; 
-
-bool forcarSincronizacao = false; 
-
-bool wifiLigado = true; 
 unsigned long lastConnectionTime = 0;
-float ultimaTempEnviada = -999.0;
-bool modoEmergencia = false; 
-
 unsigned long lastSensorRead = 0;     
-const int INTERVALO_LEITURA_TELA = 1000; 
-
 unsigned long previousMillisBlink = 0;
-bool ledState = LOW;
-bool shouldSaveConfig = false;
 unsigned long btnPressStart = 0;
 
-void saveConfigCallback () {
-  Serial.println("Alterações detectadas no Portal. Salvando...");
-  shouldSaveConfig = true;
-}
+const int INTERVALO_LEITURA_TELA = 1000; 
+float ultimaTempEnviada = -999.0;
+String boxStatus = "AGUARDANDO"; 
 
 void setRGB(int r, int g, int b) {
   digitalWrite(PIN_RGB_R, r);
   digitalWrite(PIN_RGB_G, g);
   digitalWrite(PIN_RGB_B, b);
 }
+void desligarWifiImediatamente() {
+  Serial.println(">>> [AÇÃO] DESLIGANDO WIFI IMEDIATAMENTE <<<");
+  
+  if (client.connected()) {
+    client.disconnect();
+  }
+  
+  WiFi.disconnect(true);
+  WiFi.mode(WIFI_OFF);
+  
+  wifiLigado = false;
+  modoManutencao = false; 
+  lastConnectionTime = millis(); 
+  lastSync = millis(); 
+  
+  setRGB(0, 0, 0);
+}
+
+void saveConfigCallback () {
+  Serial.println("Alterações detectadas no Portal. Salvando...");
+  shouldSaveConfig = true;
+}
 
 int lerBateria() {
   int raw = analogRead(PIN_BATTERY);
   float voltage = (raw / 4095.0) * 3.3 * 2.0; 
   int percentage = map((int)(voltage * 100), 300, 420, 0, 100);
-
   if (percentage > 100) percentage = 100;
   if (percentage < 0) percentage = 0;
-
   return percentage;
 }
 
@@ -141,6 +149,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   
   Serial.print("--- [COMANDO RECEBIDO] --- ");
   Serial.println(message);
+  
   if (message.indexOf("MANUTENCAO_ON") >= 0) {
       Serial.println("!!! MODO MANUTENCAO ATIVADO: WIFI FICARA LIGADO !!!");
       modoManutencao = true;
@@ -148,9 +157,8 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   else if (message.indexOf("MANUTENCAO_OFF") >= 0) {
       Serial.println("!!! MODO MANUTENCAO DESATIVADO: VOLTANDO A ECONOMIA !!!");
-      modoManutencao = false;
-      setRGB(0, 0, 0); 
-}
+      desligarWifiImediatamente();
+  }
 }
 
 void atualizarHardware(bool online, bool erroSensor, int luz) {
@@ -166,6 +174,9 @@ void atualizarHardware(bool online, bool erroSensor, int luz) {
       ledState = !ledState;
       setRGB(ledState, 0, 0); 
     }
+  }
+  else if (modoManutencao) {
+      setRGB(1, 0, 0);
   }
   else if (online) {
     if (forcarSincronizacao) {
@@ -231,11 +242,8 @@ void gerenciarConexao(bool precisaSincronizar, bool emergencia, bool comandoSync
   } 
   else if (wifiLigado && offlineBuffer.empty() && !comandoSync && !emergencia) {
      if (millis() - lastConnectionTime > 5000) { 
-       Serial.println(">>> DESLIGANDO WIFI (Economia) <<<");
-       client.disconnect();
-       WiFi.disconnect(true);
-       WiFi.mode(WIFI_OFF); 
-       wifiLigado = false;
+       Serial.println(">>> DESLIGANDO WIFI (Economia - Timeout) <<<");
+       desligarWifiImediatamente();
      }
   }
 }
@@ -277,7 +285,6 @@ void setup() {
   WiFiManagerParameter custom_mqtt_server("server", "IP AWS (Broker)", mqtt_server, 40);
   WiFiManagerParameter custom_mqtt_port("port", "Porta MQTT", mqtt_port, 6);
   WiFiManagerParameter custom_box_id("boxid", "ID da Caixa", box_id, 15);
-  
   WiFiManagerParameter custom_duration("duration", "Duracao Viagem (Horas)", config_duracao, 6);
   WiFiManagerParameter custom_sync("sync", "Sync Periodo (Minutos)", config_sync_min, 6);
 
@@ -331,28 +338,22 @@ void setup() {
   client.setServer(mqtt_server, portaInt);
   client.setCallback(callback);
 
-
   Serial.println("--- FIM SETUP: Desconectando para iniciar modo economia ---");
-  WiFi.disconnect(true);
-  WiFi.mode(WIFI_OFF);
-  wifiLigado = false;
+  desligarWifiImediatamente();
 }
 
 void loop() {
   checkResetButton();
-  if (modoManutencao && wifiLigado) {
-      if (!client.connected()) {
-          if (client.connect(box_id)) {
-             client.subscribe(topicComando.c_str());
-          }
-      }
-      client.loop();
+  if (wifiLigado) {
+     if (!client.connected()) {
+         if (client.connect(box_id)) {
+            client.subscribe(topicComando.c_str());
+         }
+     }
+     client.loop(); 
   }
 
-  
-  if (wifiLigado) {
-    client.loop(); 
-    if (client.connected() && !offlineBuffer.empty()) {
+  if (wifiLigado && client.connected() && !offlineBuffer.empty()) {
        Serial.println("--- [SYNC EM ANDAMENTO] ---");
        while (!offlineBuffer.empty() && client.connected()) {
           String msg = offlineBuffer.front(); 
@@ -369,15 +370,12 @@ void loop() {
            Serial.println("Comando Sync Concluido!");
            forcarSincronizacao = false;
        }
-    }
   }
 
   unsigned long now = millis();
-
   if (now - lastSensorRead > INTERVALO_LEITURA_TELA) {
       lastSensorRead = now;
-
-      setRGB(0,0,0); 
+      if (!modoManutencao) setRGB(0,0,0); 
       delay(5); 
       int luz = analogRead(PIN_LDR); 
       int bateriaPct = lerBateria();
@@ -391,7 +389,6 @@ void loop() {
       modoEmergencia = (caixaViolada || variacaoBrusca);
 
       bool emergenciaValida = (modoEmergencia && (now - lastMsgEmergencia > 5000));
-
       bool horaDeMedir = (now - lastMedicao > intervaloMedicaoReal);     
       bool horaDeSync  = (now - lastSync > intervaloSincronizacaoReal);  
       bool memoriaCheia = (offlineBuffer.size() > (CAPACIDADE_MEMORIA_MENSAGENS * 0.9));
@@ -399,6 +396,7 @@ void loop() {
       gerenciarConexao(horaDeSync || memoriaCheia, emergenciaValida, forcarSincronizacao);
       
       atualizarHardware(wifiLigado, erroSensor, luz);
+
       if(modoManutencao) {
         display.clearDisplay();
         display.setTextSize(1);
@@ -410,8 +408,10 @@ void loop() {
       } else {
         drawScreen(temp, luz, offlineBuffer.size(), wifiLigado, erroSensor, bateriaPct);
       }
+      bool deveGravar = horaDeMedir || emergenciaValida || forcarSincronizacao;
+      if (modoManutencao) deveGravar = true; 
 
-      if (horaDeMedir || emergenciaValida || forcarSincronizacao || (modoManutencao && horaDeMedir)) {
+      if (deveGravar) {
         
         if (horaDeMedir) {
            lastMedicao = now;
@@ -433,17 +433,17 @@ void loop() {
 
         char buffer[256];
         serializeJson(doc, buffer);
-
         if (wifiLigado && client.connected()) {
           Serial.print("[ONLINE] Enviando: "); Serial.println(buffer);
           client.publish(topicTelemetria.c_str(), buffer);
         } else {
-          Serial.print("[BUFFER] "); Serial.println(buffer);
-          
-          if (offlineBuffer.size() >= CAPACIDADE_MEMORIA_MENSAGENS) {
-            offlineBuffer.erase(offlineBuffer.begin()); 
+          if (!modoManutencao) {
+             Serial.print("[BUFFER] "); Serial.println(buffer);
+             if (offlineBuffer.size() >= CAPACIDADE_MEMORIA_MENSAGENS) {
+               offlineBuffer.erase(offlineBuffer.begin()); 
+             }
+             offlineBuffer.push_back(String(buffer));
           }
-          offlineBuffer.push_back(String(buffer));
         }
       }
   }

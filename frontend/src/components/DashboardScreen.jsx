@@ -1,11 +1,14 @@
-import { useState, useEffect, useCallback } from 'react';
+import { useState, useEffect, useCallback, useRef } from 'react';
 import axios from 'axios';
 
 const API_URL = "http://98.90.117.5:8000";
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({});
-  const [manualOverrides, setManualOverrides] = useState({});
+
+  const [loadingStates, setLoadingStates] = useState({}); 
+  const loadingStatesRef = useRef({});
+  loadingStatesRef.current = loadingStates;
 
   const styles = {
     switchContainer: {
@@ -13,29 +16,31 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       display: 'inline-block',
       width: '44px',
       height: '24px',
+      transition: 'opacity 0.3s'
     },
     switchInput: {
       opacity: 0,
       width: 0,
       height: 0,
     },
-    slider: (checked) => ({
+    slider: (checked, isLoading) => ({
       position: 'absolute',
-      cursor: 'pointer',
+      cursor: isLoading ? 'wait' : 'pointer',
       top: 0,
       left: 0,
       right: 0,
       bottom: 0,
-      backgroundColor: checked ? '#22c55e' : '#cbd5e1', 
+      backgroundColor: checked ? '#22c55e' : '#cbd5e1',
       transition: '.4s',
       borderRadius: '34px',
+      opacity: isLoading ? 0.6 : 1
     }),
     sliderBefore: (checked) => ({
       position: 'absolute',
       content: '""',
       height: '18px',
       width: '18px',
-      left: checked ? '22px' : '4px', 
+      left: checked ? '22px' : '4px',
       bottom: '3px',
       backgroundColor: 'white',
       transition: '.4s',
@@ -44,19 +49,71 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     })
   };
 
+  const fetchVisaoGeral = useCallback(async () => {
+    const t = Date.now();
+
+    const promises = (estoqueConfig || []).map(async (item) => {
+      try {
+        const res = await axios.get(`${API_URL}/analise/${item.id}?t=${t}`);
+        const analise = res.data?.analise_risco ?? {};
+        const tele = res.data?.telemetria ?? {};
+        const ultimoDado = tele.historico && tele.historico.length > 0 ? tele.historico[0] : {};
+        const modoBackendAtivo = ultimoDado.modo === "MANUTENCAO_ONLINE"; 
+        
+        return {
+          id: item.id,
+          data: {
+            score: analise.health_score ?? null,
+            status_operacional: analise.status_operacional ?? null,
+            temp: typeof tele.temperatura_atual === 'number' ? tele.temperatura_atual : null,
+            violacao: tele?.violacao ?? false,
+            tampa_aberta: tele?.tampa_aberta ?? false,
+            historico: tele?.historico ?? [],
+            erro: false,
+            modoBackend: modoBackendAtivo 
+          }
+        };
+      } catch (err) {
+        return {
+          id: item.id,
+          data: {
+            score: null, status_operacional: null, temp: null, violacao: false, tampa_aberta: false, historico: [], erro: true,
+            modoBackend: false
+          }
+        };
+      }
+    });
+
+    const results = await Promise.all(promises);
+
+    setResumoEstoque(prevState => {
+      const newState = { ...prevState };
+      
+      results.forEach(({ id, data }) => {
+        const isLoading = loadingStatesRef.current[id];
+        const statusManutencaoFinal = isLoading 
+            ? (prevState[id]?.emManutencao ?? false) 
+            : data.modoBackend; 
+
+        newState[id] = {
+          ...data,
+          emManutencao: statusManutencaoFinal
+        };
+      });
+      
+      return newState;
+    });
+  }, [estoqueConfig]);
+
   const toggleManutencao = async (boxId, estadoAtualOn, e) => {
     e.stopPropagation();
 
-    const comando = estadoAtualOn ? "MANUTENCAO_OFF" : "MANUTENCAO_ON";
-    const novoStatus = !estadoAtualOn;
+    if (loadingStates[boxId]) return;
 
-    setManualOverrides(prev => ({
-        ...prev,
-        [boxId]: {
-            active: novoStatus,
-            expires: Date.now() + 30000 
-        }
-    }));
+    const novoStatus = !estadoAtualOn;
+    const comando = novoStatus ? "MANUTENCAO_ON" : "MANUTENCAO_OFF";
+
+    setLoadingStates(prev => ({ ...prev, [boxId]: true }));
 
     setResumoEstoque(prev => ({
       ...prev,
@@ -68,68 +125,36 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
     try {
       await axios.post(`${API_URL}/controle/${boxId}`, { comando });
-      console.log(`Comando ${comando} enviado com sucesso.`);
+      console.log(`Comando ${comando} enviado para ${boxId}`);
+ 
+      setTimeout(() => {
+         setLoadingStates(prev => {
+             const copy = { ...prev };
+             delete copy[boxId];
+             return copy;
+         });
+      }, 1000);
+
     } catch (error) {
       console.error("Erro ao enviar comando", error);
-      alert("Erro de conexão. O comando não foi enviado.");
-      setManualOverrides(prev => {
-          const copy = { ...prev };
-          delete copy[boxId];
-          return copy;
-      });
+      alert("Falha na conexão com a caixa.");
+      
       setResumoEstoque(prev => ({
         ...prev,
         [boxId]: { ...prev[boxId], emManutencao: estadoAtualOn }
       }));
+      
+      setLoadingStates(prev => {
+         const copy = { ...prev };
+         delete copy[boxId];
+         return copy;
+      });
     }
   };
 
-  const fetchVisaoGeral = useCallback(async () => {
-    const t = Date.now();
-    const novos = {};
-
-    await Promise.all(
-      (estoqueConfig || []).map(async (item) => {
-        try {
-          const res = await axios.get(`${API_URL}/analise/${item.id}?t=${t}`);
-          const analise = res.data?.analise_risco ?? {};
-          const tele = res.data?.telemetria ?? {};
-          const ultimoDado = tele.historico && tele.historico.length > 0 ? tele.historico[0] : {};
-          const modoBackendAtivo = ultimoDado.modo === "MANUTENCAO_ONLINE"; 
-          let statusFinalSwitch = modoBackendAtivo;
-          
-          if (manualOverrides[item.id]) {
-              if (Date.now() < manualOverrides[item.id].expires) {
-                  statusFinalSwitch = manualOverrides[item.id].active;
-              } else {
-              }
-          }
-
-          novos[item.id] = {
-            score: analise.health_score ?? null,
-            status_operacional: analise.status_operacional ?? null,
-            temp: typeof tele.temperatura_atual === 'number' ? tele.temperatura_atual : null, 
-            violacao: tele?.violacao ?? false,
-            tampa_aberta: tele?.tampa_aberta ?? false,
-            historico: tele?.historico ?? [],
-            erro: false,
-            emManutencao: statusFinalSwitch 
-          };
-        } catch (err) {
-          const statusAtual = resumoEstoque[item.id]?.emManutencao || false;
-          novos[item.id] = {
-            score: null, status_operacional: null, temp: null, violacao: false, tampa_aberta: false, historico: [], erro: true,
-            emManutencao: statusAtual
-          };
-        }
-      })
-    );
-    setResumoEstoque(novos);
-  }, [estoqueConfig, manualOverrides, resumoEstoque]);
-
   useEffect(() => {
-    fetchVisaoGeral();
-    const id = setInterval(fetchVisaoGeral, 3000); 
+    fetchVisaoGeral(); 
+    const id = setInterval(fetchVisaoGeral, 3000);
     return () => clearInterval(id);
   }, [fetchVisaoGeral]);
 
@@ -142,8 +167,10 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       <div className="caixa-grid">
         {(estoqueConfig || []).map((item) => {
           const dados = resumoEstoque[item.id];
-          const score = dados ? dados.score : null;
+          const isLoadingSwitch = loadingStates[item.id];
+          
           let corStatus = '#cbd5e1'; let statusLabel = 'AGUARDANDO'; let classeAnimacao = 'status-offline'; let icone = '❄️';
+          const score = dados ? dados.score : null;
 
           if (!dados || dados.erro || dados.status_operacional === 'OFFLINE') {
              corStatus = '#94a3b8'; statusLabel = 'OFFLINE'; classeAnimacao = 'status-offline'; icone = '📡';
@@ -196,22 +223,23 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                   display: 'flex', 
                   justifyContent: 'space-between', 
                   alignItems: 'center',
-                  border: isManutencao ? '1px solid #22c55e' : '1px solid transparent'
+                  border: isManutencao ? '1px solid #22c55e' : '1px solid transparent',
+                  transition: 'border 0.3s'
               }}>
                 <div style={{ display: 'flex', flexDirection: 'column' }}>
                     <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#334155' }}>
                         CONEXÃO TEMPO REAL
                     </span>
                     <span style={{ fontSize: '0.65rem', color: isManutencao ? '#22c55e' : '#94a3b8' }}>
-                        {isManutencao ? 'Ativo (Alto consumo)' : 'Desativado (Modo Eco)'}
+                        {isLoadingSwitch ? 'Processando...' : (isManutencao ? 'Ativo (Alto consumo)' : 'Desativado (Modo Eco)')}
                     </span>
                 </div>
                 
                 <div 
-                    style={styles.switchContainer} 
-                    onClick={(e) => toggleManutencao(item.id, isManutencao, e)}
+                    style={{...styles.switchContainer, opacity: isOfflineOrAguardando ? 0.5 : 1}} 
+                    onClick={(e) => !isOfflineOrAguardando && toggleManutencao(item.id, isManutencao, e)}
                 >
-                    <div style={styles.slider(isManutencao)}></div>
+                    <div style={styles.slider(isManutencao, isLoadingSwitch)}></div>
                     <div style={styles.sliderBefore(isManutencao)}></div>
                 </div>
               </div>
