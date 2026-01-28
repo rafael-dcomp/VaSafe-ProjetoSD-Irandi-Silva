@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 
 const API_URL = "http://98.90.117.5:8000"
@@ -6,8 +6,6 @@ const STORAGE_KEY = 'lote_pending_actions'
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({})
-
-  // pendingActions armazena: { [id]: { target: boolean, timestamp: number } }
   const [pendingActions, setPendingActions] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
@@ -17,7 +15,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     }
   })
 
-  // Salva persistência no LocalStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(pendingActions))
   }, [pendingActions])
@@ -34,7 +31,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       const colorGray = '#94a3b8'
       let baseColor = tipo === 'ON' ? colorGreen : colorRed
 
-      // Se ESTE botão específico está processando
       if (isSelfProcessing) {
          return {
           flex: 1,
@@ -109,8 +105,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
   const fetchVisaoGeral = useCallback(async () => {
     const t = Date.now()
-    
-    // Limpeza de ações pendentes velhas (> 45s)
     setPendingActions(prev => {
       const now = Date.now()
       let changed = false
@@ -172,16 +166,14 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         const pending = pendingActions[id]
 
         if (pending) {
-          // Se o servidor já obedeceu o comando (Sincronizado)
           if (data.modoBackend === pending.target) {
              actionsToClear.push(id)
              newState[id] = { ...data, emManutencao: data.modoBackend, pendingTarget: null }
           } else {
-             // Ainda não obedeceu, mantemos a UI otimista mas "Processando"
              newState[id] = { 
                ...data, 
                emManutencao: pending.target, 
-               pendingTarget: pending.target // Marca qual é o alvo pendente
+               pendingTarget: pending.target 
              }
           }
         } else {
@@ -218,19 +210,14 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const enviarComandoManutencao = async (boxId, comandoTipo, e) => {
     if (e && e.stopPropagation) e.stopPropagation()
     
-    // NÃO BLOQUEIAMOS mais se já estiver processando.
-    // Permitimos a troca de comando.
-
     const comando = comandoTipo === 'ON' ? "MANUTENCAO_ON" : "MANUTENCAO_OFF"
     const targetStatus = comandoTipo === 'ON'
 
-    // Atualiza a pendência (se já existia uma contrária, sobrescreve)
     setPendingActions(prev => ({
       ...prev,
       [boxId]: { target: targetStatus, timestamp: Date.now() }
     }))
 
-    // Atualiza UI imediata
     setResumoEstoque(prev => ({ 
         ...prev, 
         [boxId]: { ...prev[boxId], emManutencao: targetStatus, pendingTarget: targetStatus } 
@@ -239,7 +226,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     try {
       await postWithRetries(`${API_URL}/controle/${boxId}`, { comando }, 3)
     } catch (error) {
-      // Se falhar rede, removemos pendência
       setPendingActions(prev => {
         const copy = { ...prev }
         delete copy[boxId]
@@ -264,8 +250,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         {(estoqueConfig || []).map((item) => {
           const dados = resumoEstoque[item.id]
           
-          // Lógica de Processamento refinada:
-          // pendingTarget é true (ON), false (OFF) ou null (Nenhum)
           const pendingTarget = dados?.pendingTarget
           const isProcessingAny = pendingTarget !== undefined && pendingTarget !== null
           
@@ -300,17 +284,22 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
           const isOfflineOrAguardando = dados?.erro === true || dados?.status_operacional === 'AGUARDANDO' || dados?.status_operacional === 'OFFLINE'
           const isManutencao = dados?.emManutencao || false
 
-          // --- LÓGICA DOS BOTÕES ---
-          
-          // Botão ON:
-          // - Processando (girando) se o alvo pendente for TRUE
-          // - Desabilitado se: Estiver offline OU (já estiver ON E não estiver pendente troca)
+          let connectionLabel = 'Controle Inativo'
+          let connectionColor = '#94a3b8'
+          let connectionWeight = 'normal'
+
+          if (isProcessingAny) {
+             connectionLabel = 'Sincronizando com a ESP...'
+             connectionColor = '#f59e0b'
+             connectionWeight = 'bold'
+          } else if (isManutencao) {
+             connectionLabel = 'Conectado com a ESP'
+             connectionColor = '#22c55e' 
+             connectionWeight = 'bold'
+          }
           const isProcessingOn = pendingTarget === true
           const disabledOn = isOfflineOrAguardando || (isManutencao && !isProcessingAny) || isProcessingOn
 
-          // Botão OFF:
-          // - Processando (girando) se o alvo pendente for FALSE
-          // - Desabilitado se: (!estiver ON E não estiver pendente troca)
           const isProcessingOff = pendingTarget === false
           const disabledOff = (!isManutencao && !isProcessingAny) || isProcessingOff
 
@@ -353,8 +342,8 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                     <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#334155' }}>
                         CONEXÃO TEMPO REAL
                     </span>
-                    <span style={{ fontSize: '0.65rem', color: isProcessingAny ? '#f59e0b' : (isManutencao ? '#22c55e' : '#94a3b8'), fontWeight: isProcessingAny ? 'bold' : 'normal' }}>
-                        {isProcessingAny ? 'Sincronizando com ESP...' : (isManutencao ? 'Ativo' : 'Inativo')}
+                    <span style={{ fontSize: '0.65rem', color: connectionColor, fontWeight: connectionWeight }}>
+                        {connectionLabel}
                     </span>
                 </div>
                 <div style={styles.btnGroup}>
