@@ -5,48 +5,64 @@ const API_URL = "http://98.90.117.5:8000";
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({});
-
-  const [loadingStates, setLoadingStates] = useState({}); 
+  const [loadingStates, setLoadingStates] = useState({});
+  
   const loadingStatesRef = useRef({});
   loadingStatesRef.current = loadingStates;
 
   const styles = {
-    switchContainer: {
-      position: 'relative',
-      display: 'inline-block',
-      width: '44px',
-      height: '24px',
-      transition: 'opacity 0.3s'
+    btnGroup: {
+      display: 'flex',
+      gap: '8px',
+      marginTop: '4px'
     },
-    switchInput: {
-      opacity: 0,
-      width: 0,
-      height: 0,
-    },
-    slider: (checked, isLoading) => ({
-      position: 'absolute',
-      cursor: isLoading ? 'wait' : 'pointer',
-      top: 0,
-      left: 0,
-      right: 0,
-      bottom: 0,
-      backgroundColor: checked ? '#22c55e' : '#cbd5e1',
-      transition: '.4s',
-      borderRadius: '34px',
-      opacity: isLoading ? 0.6 : 1
-    }),
-    sliderBefore: (checked) => ({
-      position: 'absolute',
-      content: '""',
-      height: '18px',
-      width: '18px',
-      left: checked ? '22px' : '4px',
-      bottom: '3px',
-      backgroundColor: 'white',
-      transition: '.4s',
-      borderRadius: '50%',
-      boxShadow: '0 2px 4px rgba(0,0,0,0.2)'
-    })
+    btnAction: (tipo, isActive, disabled) => {
+      const colorGreen = '#22c55e';
+      const colorRed = '#ef4444';
+      const colorGray = '#94a3b8';
+
+      let baseColor = tipo === 'ON' ? colorGreen : colorRed;
+      
+      if (disabled && !isActive) return {
+        flex: 1,
+        padding: '6px 0',
+        borderRadius: '6px',
+        border: `1px solid ${colorGray}`,
+        backgroundColor: 'transparent',
+        color: colorGray,
+        cursor: 'not-allowed',
+        opacity: 0.5,
+        fontSize: '0.7rem',
+        fontWeight: 'bold'
+      };
+      if (isActive) {
+        return {
+          flex: 1,
+          padding: '6px 0',
+          borderRadius: '6px',
+          border: `1px solid ${baseColor}`,
+          backgroundColor: baseColor,
+          color: 'white',
+          cursor: 'default', 
+          fontSize: '0.7rem',
+          fontWeight: 'bold',
+          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+        };
+      }
+      return {
+        flex: 1,
+        padding: '6px 0',
+        borderRadius: '6px',
+        border: `1px solid ${baseColor}`,
+        backgroundColor: 'white',
+        color: baseColor,
+        cursor: disabled ? 'not-allowed' : 'pointer',
+        opacity: disabled ? 0.6 : 1,
+        fontSize: '0.7rem',
+        fontWeight: 'bold',
+        transition: 'all 0.2s'
+      };
+    }
   };
 
   const fetchVisaoGeral = useCallback(async () => {
@@ -105,21 +121,22 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     });
   }, [estoqueConfig]);
 
-  const toggleManutencao = async (boxId, estadoAtualOn, e) => {
-    e.stopPropagation();
+  const enviarComandoManutencao = async (boxId, comandoTipo, e) => {
+    e.stopPropagation(); // Evita abrir os detalhes da caixa ao clicar no botão
 
     if (loadingStates[boxId]) return;
 
-    const novoStatus = !estadoAtualOn;
-    const comando = novoStatus ? "MANUTENCAO_ON" : "MANUTENCAO_OFF";
+    const comando = comandoTipo === 'ON' ? "MANUTENCAO_ON" : "MANUTENCAO_OFF";
+    const novoStatusBooleano = comandoTipo === 'ON';
 
     setLoadingStates(prev => ({ ...prev, [boxId]: true }));
 
+    // Atualização otimista da UI
     setResumoEstoque(prev => ({
       ...prev,
       [boxId]: {
         ...prev[boxId],
-        emManutencao: novoStatus
+        emManutencao: novoStatusBooleano
       }
     }));
 
@@ -139,9 +156,10 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       console.error("Erro ao enviar comando", error);
       alert("Falha na conexão com a caixa.");
       
+      // Reverte estado em caso de erro
       setResumoEstoque(prev => ({
         ...prev,
-        [boxId]: { ...prev[boxId], emManutencao: estadoAtualOn }
+        [boxId]: { ...prev[boxId], emManutencao: !novoStatusBooleano }
       }));
       
       setLoadingStates(prev => {
@@ -220,27 +238,34 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                   backgroundColor: '#f8fafc',
                   padding: '10px',
                   borderRadius: '8px',
-                  display: 'flex', 
-                  justifyContent: 'space-between', 
-                  alignItems: 'center',
                   border: isManutencao ? '1px solid #22c55e' : '1px solid transparent',
                   transition: 'border 0.3s'
               }}>
-                <div style={{ display: 'flex', flexDirection: 'column' }}>
+                <div style={{ marginBottom: '8px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#334155' }}>
                         CONEXÃO TEMPO REAL
                     </span>
                     <span style={{ fontSize: '0.65rem', color: isManutencao ? '#22c55e' : '#94a3b8' }}>
-                        {isLoadingSwitch ? 'Processando...' : (isManutencao ? 'Ativo (Alto consumo)' : 'Desativado (Modo Eco)')}
+                        {isLoadingSwitch ? 'Processando...' : (isManutencao ? 'Ativo' : 'Inativo')}
                     </span>
                 </div>
                 
-                <div 
-                    style={{...styles.switchContainer, opacity: isOfflineOrAguardando ? 0.5 : 1}} 
-                    onClick={(e) => !isOfflineOrAguardando && toggleManutencao(item.id, isManutencao, e)}
-                >
-                    <div style={styles.slider(isManutencao, isLoadingSwitch)}></div>
-                    <div style={styles.sliderBefore(isManutencao)}></div>
+                <div style={styles.btnGroup}>
+                    <button 
+                        style={styles.btnAction('ON', isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
+                        onClick={(e) => !isManutencao && !isOfflineOrAguardando && enviarComandoManutencao(item.id, 'ON', e)}
+                        disabled={isManutencao || isOfflineOrAguardando || isLoadingSwitch}
+                    >
+                        ATIVAR
+                    </button>
+
+                    <button 
+                        style={styles.btnAction('OFF', !isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
+                        onClick={(e) => isManutencao && !isOfflineOrAguardando && enviarComandoManutencao(item.id, 'OFF', e)}
+                        disabled={!isManutencao || isOfflineOrAguardando || isLoadingSwitch}
+                    >
+                        DESATIVAR
+                    </button>
                 </div>
               </div>
             </div>

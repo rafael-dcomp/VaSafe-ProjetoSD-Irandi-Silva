@@ -65,11 +65,13 @@ const int INTERVALO_LEITURA_TELA = 1000;
 float ultimaTempEnviada = -999.0;
 String boxStatus = "AGUARDANDO"; 
 
+
 void setRGB(int r, int g, int b) {
   digitalWrite(PIN_RGB_R, r);
   digitalWrite(PIN_RGB_G, g);
   digitalWrite(PIN_RGB_B, b);
 }
+
 void desligarWifiImediatamente() {
   Serial.println(">>> [AÇÃO] DESLIGANDO WIFI IMEDIATAMENTE <<<");
   
@@ -81,7 +83,9 @@ void desligarWifiImediatamente() {
   WiFi.mode(WIFI_OFF);
   
   wifiLigado = false;
-  modoManutencao = false; 
+  if(!modoManutencao) {
+  }
+  
   lastConnectionTime = millis(); 
   lastSync = millis(); 
   
@@ -157,6 +161,7 @@ void callback(char* topic, byte* payload, unsigned int length) {
   }
   else if (message.indexOf("MANUTENCAO_OFF") >= 0) {
       Serial.println("!!! MODO MANUTENCAO DESATIVADO: VOLTANDO A ECONOMIA !!!");
+      modoManutencao = false; 
       desligarWifiImediatamente();
   }
 }
@@ -214,29 +219,68 @@ void gerenciarConexao(bool precisaSincronizar, bool emergencia, bool comandoSync
 
   if (modoManutencao) {
     if (!wifiLigado) {
+        Serial.println(">>> [MANUTENCAO] RELIGANDO WIFI...");
         WiFi.mode(WIFI_STA);
         WiFi.begin();
-        wifiLigado = true;
+        int attempts = 0;
+        while(WiFi.status() != WL_CONNECTED && attempts < 20) {
+            delay(500); Serial.print("."); attempts++;
+        }
+        Serial.println();
+
+        if (WiFi.status() == WL_CONNECTED) {
+            wifiLigado = true;
+            Serial.println("WiFi Conectado (Manutencao)!");
+        } else {
+             Serial.println("Falha WiFi (Manutencao)");
+        }
     }
-    if (WiFi.status() == WL_CONNECTED && !client.connected()) {
+    
+    if (wifiLigado && WiFi.status() == WL_CONNECTED && !client.connected()) {
          if (client.connect(box_id)) {
            client.subscribe(topicComando.c_str());
+           Serial.println("MQTT Reconectado (Manutencao)");
          }
     }
     return; 
   }
+
   if (precisaSincronizar || emergencia || comandoSync) {
+    
     if (!wifiLigado) {
       Serial.println(">>> LIGANDO WIFI (Necessario Sync/Emergencia) <<<");
       WiFi.mode(WIFI_STA); 
       WiFi.begin();        
-      wifiLigado = true;
-      lastConnectionTime = millis();
+
+      int tentativas = 0;
+      Serial.print("Aguardando IP");
+      while (WiFi.status() != WL_CONNECTED && tentativas < 20) { 
+          delay(500);
+          Serial.print(".");
+          tentativas++;
+      }
+      Serial.println();
+
+      if (WiFi.status() == WL_CONNECTED) {
+          wifiLigado = true;
+          lastConnectionTime = millis();
+          Serial.println("WiFi Conectado com Sucesso!");
+      } else {
+          Serial.println("ERRO: Timeout ao conectar WiFi.");
+          WiFi.disconnect(true);
+          WiFi.mode(WIFI_OFF);
+          wifiLigado = false;
+          return; 
+      }
     }
     
     if (WiFi.status() == WL_CONNECTED && !client.connected()) {
        if (client.connect(box_id)) {
          client.subscribe(topicComando.c_str());
+         Serial.println("MQTT Conectado!");
+       } else {
+         Serial.print("Falha MQTT rc=");
+         Serial.println(client.state());
        }
     }
   } 
@@ -344,32 +388,34 @@ void setup() {
 
 void loop() {
   checkResetButton();
-  if (wifiLigado) {
-     if (!client.connected()) {
-         if (client.connect(box_id)) {
-            client.subscribe(topicComando.c_str());
-         }
-     }
-     client.loop(); 
+
+  if (wifiLigado && WiFi.status() == WL_CONNECTED) {
+      if (!client.connected()) {
+          if (client.connect(box_id)) {
+             client.subscribe(topicComando.c_str());
+          }
+      }
+      client.loop(); 
   }
 
   if (wifiLigado && client.connected() && !offlineBuffer.empty()) {
-       Serial.println("--- [SYNC EM ANDAMENTO] ---");
-       while (!offlineBuffer.empty() && client.connected()) {
-          String msg = offlineBuffer.front(); 
-          Serial.print(">> Upload: "); Serial.println(msg); 
-          
-          client.publish(topicTelemetria.c_str(), msg.c_str());
-          offlineBuffer.erase(offlineBuffer.begin());
-          client.loop(); 
-          delay(50);     
-       }
-       lastSync = millis(); 
-       
-       if (offlineBuffer.empty() && forcarSincronizacao) {
-           Serial.println("Comando Sync Concluido!");
-           forcarSincronizacao = false;
-       }
+        Serial.println("--- [SYNC EM ANDAMENTO] ---");
+        while (!offlineBuffer.empty() && client.connected()) {
+           String msg = offlineBuffer.front(); 
+           Serial.print(">> Upload: "); Serial.println(msg); 
+           
+           client.publish(topicTelemetria.c_str(), msg.c_str());
+           offlineBuffer.erase(offlineBuffer.begin());
+           client.loop(); 
+           delay(50);     
+        }
+        lastSync = millis(); 
+        lastConnectionTime = millis(); 
+        
+        if (offlineBuffer.empty() && forcarSincronizacao) {
+            Serial.println("Comando Sync Concluido!");
+            forcarSincronizacao = false;
+        }
   }
 
   unsigned long now = millis();
@@ -408,6 +454,7 @@ void loop() {
       } else {
         drawScreen(temp, luz, offlineBuffer.size(), wifiLigado, erroSensor, bateriaPct);
       }
+      
       bool deveGravar = horaDeMedir || emergenciaValida || forcarSincronizacao;
       if (modoManutencao) deveGravar = true; 
 
@@ -433,7 +480,8 @@ void loop() {
 
         char buffer[256];
         serializeJson(doc, buffer);
-        if (wifiLigado && client.connected()) {
+        
+        if (wifiLigado && WiFi.status() == WL_CONNECTED && client.connected()) {
           Serial.print("[ONLINE] Enviando: "); Serial.println(buffer);
           client.publish(topicTelemetria.c_str(), buffer);
         } else {
