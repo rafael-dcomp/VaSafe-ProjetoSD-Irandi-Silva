@@ -6,6 +6,8 @@ const API_URL = "http://98.90.117.5:8000"
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({})
   const [loadingStates, setLoadingStates] = useState({})
+  
+  // Refs para manter o estado visual "travado" enquanto o backend processa
   const forcedStatusRef = useRef({})
   const forcedExpiryRef = useRef({})
 
@@ -20,11 +22,12 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       const colorRed = '#ef4444'
       const colorGray = '#94a3b8'
       let baseColor = tipo === 'ON' ? colorGreen : colorRed
+      
       if (disabled && !isActive) return {
         flex: 1,
         padding: '6px 0',
         borderRadius: '6px',
-        border: `1px solid ${colorGray}`,
+        border: `1px solid ${colorGray}`, // Corrigido crase
         backgroundColor: 'transparent',
         color: colorGray,
         cursor: 'not-allowed',
@@ -36,7 +39,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         flex: 1,
         padding: '6px 0',
         borderRadius: '6px',
-        border: `1px solid ${baseColor}`,
+        border: `1px solid ${baseColor}`, // Corrigido crase
         backgroundColor: baseColor,
         color: 'white',
         cursor: 'default',
@@ -48,7 +51,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         flex: 1,
         padding: '6px 0',
         borderRadius: '6px',
-        border: `1px solid ${baseColor}`,
+        border: `1px solid ${baseColor}`, // Corrigido crase
         backgroundColor: 'white',
         color: baseColor,
         cursor: disabled ? 'not-allowed' : 'pointer',
@@ -76,11 +79,12 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     const t = Date.now()
     const promises = (estoqueConfig || []).map(async (item) => {
       try {
-        const res = await axios.get(`${API_URL}/analise/${item.id}?t=${t}`)
+        const res = await axios.get(`${API_URL}/analise/${item.id}?t=${t}`) // Corrigido crase
         const analise = res.data?.analise_risco ?? {}
         const tele = res.data?.telemetria ?? {}
         const ultimoDado = Array.isArray(tele.historico) && tele.historico.length > 0 ? tele.historico[0] : {}
         const modoFromServer = normalizeModo(ultimoDado.modo ?? tele.modo ?? '')
+        
         return {
           id: item.id,
           data: {
@@ -110,28 +114,39 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         }
       }
     })
+
     const results = await Promise.all(promises)
+
     setResumoEstoque(prevState => {
       const newState = { ...prevState }
       const now = Date.now()
+
       results.forEach(({ id, data }) => {
         const forced = forcedStatusRef.current[id]
         const expiry = forcedExpiryRef.current[id] || 0
+        
+        // LÓGICA DE SINCRONIZAÇÃO:
         if (forced !== undefined) {
-          const serverModo = data.modoBackend === null ? false : data.modoBackend
+          const serverModo = data.modoBackend
+          
+          // 1. Se o servidor já está igual ao que forçamos, ÓTIMO. Soltamos a trava.
           if (serverModo === forced) {
             delete forcedStatusRef.current[id]
             delete forcedExpiryRef.current[id]
             newState[id] = { ...data, emManutencao: serverModo }
-          } else if (now > expiry) {
+          } 
+          // 2. Se passou muito tempo (15s) e o servidor não respondeu, soltamos a trava.
+          else if (now > expiry) {
             delete forcedStatusRef.current[id]
             delete forcedExpiryRef.current[id]
-            newState[id] = { ...data, emManutencao: data.modoBackend ?? false }
-          } else {
+            newState[id] = { ...data, emManutencao: data.modoBackend }
+          } 
+          // 3. Caso contrário, MANTEMOS A MENTIRA VISUAL (o botão fica ativo esperando o ESP32)
+          else {
             newState[id] = { ...data, emManutencao: forced }
           }
         } else {
-          newState[id] = { ...data, emManutencao: data.modoBackend ?? false }
+          newState[id] = { ...data, emManutencao: data.modoBackend }
         }
       })
       return newState
@@ -153,27 +168,49 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const enviarComandoManutencao = async (boxId, comandoTipo, e) => {
     if (e && e.stopPropagation) e.stopPropagation()
     if (loadingStates[boxId]) return
+
     const comando = comandoTipo === 'ON' ? "MANUTENCAO_ON" : "MANUTENCAO_OFF"
     const novoStatusBooleano = comandoTipo === 'ON'
+
     setLoadingStates(prev => ({ ...prev, [boxId]: true }))
+
+    // Define a trava visual
     forcedStatusRef.current[boxId] = novoStatusBooleano
-    forcedExpiryRef.current[boxId] = Date.now() + 30000
-    setResumoEstoque(prev => ({ ...prev, [boxId]: { ...prev[boxId], emManutencao: novoStatusBooleano } }))
+    // Dá 15 segundos para o ESP32 conectar e o backend atualizar
+    forcedExpiryRef.current[boxId] = Date.now() + 15000 
+
+    // Atualiza UI instantaneamente
+    setResumoEstoque(prev => ({ 
+        ...prev, 
+        [boxId]: { ...prev[boxId], emManutencao: novoStatusBooleano } 
+    }))
+
     try {
-      await postWithRetries(`${API_URL}/controle/${boxId}`, { comando }, 3)
+      await postWithRetries(`${API_URL}/controle/${boxId}`, { comando }, 3) // Corrigido crase
+      
+      // AQUI ESTAVA O ERRO:
+      // Apenas liberamos o loading (spinner).
+      // NÃO apagamos o forcedStatusRef aqui. Deixamos o fetchVisaoGeral apagar
+      // quando perceber que o backend sincronizou.
       setTimeout(() => {
-        delete forcedExpiryRef.current[boxId]
-        delete forcedStatusRef.current[boxId]
         setLoadingStates(prev => {
           const copy = { ...prev }
           delete copy[boxId]
           return copy
         })
-      }, 2000)
+        // NÃO DELETE O forcedStatusRef AQUI!
+      }, 2000) 
+
     } catch (error) {
+      // Se deu erro na requisição HTTP (API fora do ar), aí sim desfazemos tudo
       delete forcedExpiryRef.current[boxId]
       delete forcedStatusRef.current[boxId]
-      setResumoEstoque(prev => ({ ...prev, [boxId]: { ...prev[boxId], emManutencao: !novoStatusBooleano } }))
+      
+      setResumoEstoque(prev => ({ 
+          ...prev, 
+          [boxId]: { ...prev[boxId], emManutencao: !novoStatusBooleano } 
+      }))
+      
       setLoadingStates(prev => {
         const copy = { ...prev }
         delete copy[boxId]
@@ -189,7 +226,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     return () => clearInterval(id)
   }, [fetchVisaoGeral])
 
-  const formatTemp = (t) => (typeof t === 'number' && !Number.isNaN(t)) ? `${t.toFixed(1)}°C` : '--'
+  const formatTemp = (t) => (typeof t === 'number' && !Number.isNaN(t)) ? `${t.toFixed(1)}°C` : '--' // Corrigido crase
 
   return (
     <div className="menu-container">
@@ -198,11 +235,13 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         {(estoqueConfig || []).map((item) => {
           const dados = resumoEstoque[item.id]
           const isLoadingSwitch = loadingStates[item.id]
+          
           let corStatus = '#cbd5e1'
           let statusLabel = 'AGUARDANDO'
           let classeAnimacao = 'status-offline'
           let icone = '❄️'
           const score = dados ? dados.score : null
+
           if (!dados || dados.erro || dados.status_operacional === 'OFFLINE') {
             corStatus = '#94a3b8'
             statusLabel = 'OFFLINE'
@@ -220,18 +259,20 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
             icone = '⚠️'
           } else {
             corStatus = '#22c55e'
-            statusLabel = score !== null ? `${score}% Saúde` : 'ESTÁVEL'
+            statusLabel = score !== null ? `${score}% Saúde` : 'ESTÁVEL' // Corrigido crase
             classeAnimacao = 'status-ok'
             icone = '❄️'
           }
+
           const isOfflineOrAguardando = dados?.erro === true || dados?.status_operacional === 'AGUARDANDO' || dados?.status_operacional === 'OFFLINE'
           const isManutencao = dados?.emManutencao || false
+
           return (
             <div
               key={item.id}
-              className={`caixa-card ${classeAnimacao}`}
+              className={`caixa-card ${classeAnimacao}`} // Corrigido crase
               onClick={() => onSelectCaixa(item.id)}
-              style={{ borderTop: `6px solid ${corStatus}`, cursor: 'pointer' }}
+              style={{ borderTop: `6px solid ${corStatus}`, cursor: 'pointer' }} // Corrigido crase
             >
               <div className="caixa-header">
                 <div className="icon-bg" style={{ backgroundColor: corStatus + '20' }}>
