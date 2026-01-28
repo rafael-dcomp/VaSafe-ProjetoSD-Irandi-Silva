@@ -118,7 +118,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         const forced = forcedStatusRef.current[id]
         const expiry = forcedExpiryRef.current[id] || 0
         if (forced !== undefined) {
-          const serverModo = data.modoBackend
+          const serverModo = data.modoBackend === null ? false : data.modoBackend
           if (serverModo === forced) {
             delete forcedStatusRef.current[id]
             delete forcedExpiryRef.current[id]
@@ -126,12 +126,12 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
           } else if (now > expiry) {
             delete forcedStatusRef.current[id]
             delete forcedExpiryRef.current[id]
-            newState[id] = { ...data, emManutencao: data.modoBackend }
+            newState[id] = { ...data, emManutencao: data.modoBackend ?? false }
           } else {
             newState[id] = { ...data, emManutencao: forced }
           }
         } else {
-          newState[id] = { ...data, emManutencao: data.modoBackend }
+          newState[id] = { ...data, emManutencao: data.modoBackend ?? false }
         }
       })
       return newState
@@ -157,7 +157,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     const novoStatusBooleano = comandoTipo === 'ON'
     setLoadingStates(prev => ({ ...prev, [boxId]: true }))
     forcedStatusRef.current[boxId] = novoStatusBooleano
-    forcedExpiryRef.current[boxId] = Date.now() + 10000
+    forcedExpiryRef.current[boxId] = Date.now() + 30000
     setResumoEstoque(prev => ({ ...prev, [boxId]: { ...prev[boxId], emManutencao: novoStatusBooleano } }))
     try {
       await postWithRetries(`${API_URL}/controle/${boxId}`, { comando }, 3)
