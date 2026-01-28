@@ -3,10 +3,23 @@ import axios from 'axios'
 
 const API_URL = "http://98.90.117.5:8000"
 
+const STORAGE_KEY = 'lote_pending_actions'
+
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({})
-  const [loadingStates, setLoadingStates] = useState({})
-  const forcedStatusRef = useRef({})
+
+  const [pendingActions, setPendingActions] = useState(() => {
+    try {
+      const saved = localStorage.getItem(STORAGE_KEY)
+      return saved ? JSON.parse(saved) : {}
+    } catch (e) {
+      return {}
+    }
+  })
+
+  useEffect(() => {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(pendingActions))
+  }, [pendingActions])
 
   const styles = {
     btnGroup: {
@@ -14,12 +27,30 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       gap: '8px',
       marginTop: '4px'
     },
-    btnAction: (tipo, isActive, disabled) => {
+    btnAction: (tipo, isActive, disabled, isProcessing) => {
       const colorGreen = '#22c55e'
       const colorRed = '#ef4444'
       const colorGray = '#94a3b8'
       let baseColor = tipo === 'ON' ? colorGreen : colorRed
-      
+
+      if (isProcessing) {
+         return {
+          flex: 1,
+          padding: '6px 0',
+          borderRadius: '6px',
+          border: `1px solid ${baseColor}`,
+          backgroundColor: isActive ? baseColor : 'transparent',
+          color: isActive ? 'white' : baseColor,
+          cursor: 'wait',
+          opacity: 0.7,
+          fontSize: '0.7rem',
+          fontWeight: 'bold',
+          display: 'flex',
+          justifyContent: 'center',
+          alignItems: 'center'
+        }
+      }
+
       if (disabled && !isActive) return {
         flex: 1,
         padding: '6px 0',
@@ -74,6 +105,20 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
   const fetchVisaoGeral = useCallback(async () => {
     const t = Date.now()
+    
+    setPendingActions(prev => {
+      const now = Date.now()
+      let changed = false
+      const newPending = { ...prev }
+      Object.keys(newPending).forEach(key => {
+        if (now - newPending[key].timestamp > 45000) {
+          delete newPending[key]
+          changed = true
+        }
+      })
+      return changed ? newPending : prev
+    })
+
     const promises = (estoqueConfig || []).map(async (item) => {
       try {
         const res = await axios.get(`${API_URL}/analise/${item.id}?t=${t}`)
@@ -116,25 +161,39 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
     setResumoEstoque(prevState => {
       const newState = { ...prevState }
+      let actionsToClear = []
 
       results.forEach(({ id, data }) => {
-        const forced = forcedStatusRef.current[id]
+        const pending = pendingActions[id]
 
-        if (forced !== undefined) {
-          const serverModo = data.modoBackend
-          if (serverModo === forced) {
-            delete forcedStatusRef.current[id]
-            newState[id] = { ...data, emManutencao: serverModo }
+        if (pending) {
+          if (data.modoBackend === pending.target) {
+             actionsToClear.push(id)
+             newState[id] = { ...data, emManutencao: data.modoBackend, isProcessing: false }
           } else {
-            newState[id] = { ...data, emManutencao: forced }
+             newState[id] = { 
+               ...data, 
+               emManutencao: pending.target,
+               isProcessing: true 
+             }
           }
         } else {
-          newState[id] = { ...data, emManutencao: data.modoBackend }
+          newState[id] = { ...data, emManutencao: data.modoBackend, isProcessing: false }
         }
       })
+      if (actionsToClear.length > 0) {
+        setTimeout(() => {
+          setPendingActions(current => {
+            const copy = { ...current }
+            actionsToClear.forEach(pid => delete copy[pid])
+            return copy
+          })
+        }, 0)
+      }
+
       return newState
     })
-  }, [estoqueConfig])
+  }, [estoqueConfig, pendingActions])
 
   const postWithRetries = async (url, body, attempts = 3) => {
     for (let i = 0; i < attempts; i++) {
@@ -150,50 +209,37 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
   const enviarComandoManutencao = async (boxId, comandoTipo, e) => {
     if (e && e.stopPropagation) e.stopPropagation()
-    if (loadingStates[boxId]) return
+
+    if (resumoEstoque[boxId]?.isProcessing) return
 
     const comando = comandoTipo === 'ON' ? "MANUTENCAO_ON" : "MANUTENCAO_OFF"
-    const novoStatusBooleano = comandoTipo === 'ON'
+    const targetStatus = comandoTipo === 'ON'
 
-    setLoadingStates(prev => ({ ...prev, [boxId]: true }))
-    forcedStatusRef.current[boxId] = novoStatusBooleano
+    setPendingActions(prev => ({
+      ...prev,
+      [boxId]: { target: targetStatus, timestamp: Date.now() }
+    }))
 
     setResumoEstoque(prev => ({ 
         ...prev, 
-        [boxId]: { ...prev[boxId], emManutencao: novoStatusBooleano } 
+        [boxId]: { ...prev[boxId], emManutencao: targetStatus, isProcessing: true } 
     }))
 
     try {
       await postWithRetries(`${API_URL}/controle/${boxId}`, { comando }, 3)
-      
-      setTimeout(() => {
-        setLoadingStates(prev => {
-          const copy = { ...prev }
-          delete copy[boxId]
-          return copy
-        })
-      }, 1000) 
-
     } catch (error) {
-      delete forcedStatusRef.current[boxId]
-      
-      setResumoEstoque(prev => ({ 
-          ...prev, 
-          [boxId]: { ...prev[boxId], emManutencao: !novoStatusBooleano } 
-      }))
-      
-      setLoadingStates(prev => {
+      setPendingActions(prev => {
         const copy = { ...prev }
         delete copy[boxId]
         return copy
       })
-      window.alert('Falha na conexão com a caixa.')
+      window.alert('Falha ao enviar comando. Verifique a conexão.')
     }
   }
 
   useEffect(() => {
     fetchVisaoGeral()
-    const id = setInterval(fetchVisaoGeral, 3000)
+    const id = setInterval(fetchVisaoGeral, 2000) 
     return () => clearInterval(id)
   }, [fetchVisaoGeral])
 
@@ -205,7 +251,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       <div className="caixa-grid">
         {(estoqueConfig || []).map((item) => {
           const dados = resumoEstoque[item.id]
-          const isLoadingSwitch = loadingStates[item.id]
+          const isProcessing = dados?.isProcessing || false
           
           let corStatus = '#cbd5e1'
           let statusLabel = 'AGUARDANDO'
@@ -277,24 +323,24 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                     <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#334155' }}>
                         CONEXÃO TEMPO REAL
                     </span>
-                    <span style={{ fontSize: '0.65rem', color: isManutencao ? '#22c55e' : '#94a3b8' }}>
-                        {isLoadingSwitch ? 'Processando...' : (isManutencao ? 'Ativo' : 'Inativo')}
+                    <span style={{ fontSize: '0.65rem', color: isProcessing ? '#f59e0b' : (isManutencao ? '#22c55e' : '#94a3b8'), fontWeight: isProcessing ? 'bold' : 'normal' }}>
+                        {isProcessing ? 'Sincronizando com ESP...' : (isManutencao ? 'Ativo' : 'Inativo')}
                     </span>
                 </div>
                 <div style={styles.btnGroup}>
                     <button
-                        style={styles.btnAction('ON', isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
+                        style={styles.btnAction('ON', isManutencao, isOfflineOrAguardando, isProcessing)}
                         onClick={(e) => enviarComandoManutencao(item.id, 'ON', e)}
-                        disabled={isManutencao || isOfflineOrAguardando || isLoadingSwitch}
+                        disabled={isManutencao || isOfflineOrAguardando || isProcessing}
                     >
-                        ATIVAR
+                        {isProcessing && !isManutencao ? '...' : 'ATIVAR'}
                     </button>
                     <button
-                        style={styles.btnAction('OFF', !isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
+                        style={styles.btnAction('OFF', !isManutencao, isOfflineOrAguardando, isProcessing)}
                         onClick={(e) => enviarComandoManutencao(item.id, 'OFF', e)}
-                        disabled={!isManutencao || isLoadingSwitch}
+                        disabled={!isManutencao || isProcessing}
                     >
-                        DESATIVAR
+                        {isProcessing && isManutencao ? '...' : 'DESATIVAR'}
                     </button>
                 </div>
               </div>
