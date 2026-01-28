@@ -6,6 +6,33 @@ const API_URL = "http://98.90.117.5:8000";
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({});
 
+  const toggleManutencao = async (boxId, estadoAtualOn, e) => {
+    e.stopPropagation();
+
+    const comando = estadoAtualOn ? "MANUTENCAO_OFF" : "MANUTENCAO_ON";
+    const novoStatus = !estadoAtualOn;
+
+    setResumoEstoque(prev => ({
+      ...prev,
+      [boxId]: {
+        ...prev[boxId],
+        emManutencao: novoStatus
+      }
+    }));
+
+    try {
+      await axios.post(`${API_URL}/controle/${boxId}`, { comando });
+    } catch (error) {
+      console.error("Erro ao enviar comando", error);
+      alert("Erro ao enviar comando de controle.");
+
+      setResumoEstoque(prev => ({
+        ...prev,
+        [boxId]: { ...prev[boxId], emManutencao: estadoAtualOn }
+      }));
+    }
+  };
+
   const fetchVisaoGeral = useCallback(async () => {
     const t = Date.now();
     const novos = {};
@@ -17,6 +44,8 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
           const analise = res.data?.analise_risco ?? {};
           const tele = res.data?.telemetria ?? {};
+          const ultimoDado = tele.historico && tele.historico.length > 0 ? tele.historico[0] : {};
+          const modoRemotoAtivo = ultimoDado.modo === "MANUTENCAO_ONLINE"; 
 
           novos[item.id] = {
             score: analise.health_score ?? null,
@@ -25,7 +54,8 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
             violacao: tele?.violacao ?? false,
             tampa_aberta: tele?.tampa_aberta ?? false,
             historico: tele?.historico ?? [],
-            erro: false
+            erro: false,
+            emManutencao: resumoEstoque[item.id]?.emManutencao || modoRemotoAtivo || false
           };
         } catch (err) {
           novos[item.id] = {
@@ -35,20 +65,21 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
             violacao: false,
             tampa_aberta: false,
             historico: [],
-            erro: true
+            erro: true,
+            emManutencao: resumoEstoque[item.id]?.emManutencao || false
           };
         }
       })
     );
 
     setResumoEstoque(novos);
-  }, [estoqueConfig]);
+  }, [estoqueConfig, resumoEstoque]);
 
   useEffect(() => {
     fetchVisaoGeral();
     const id = setInterval(fetchVisaoGeral, 3000);
     return () => clearInterval(id);
-  }, [fetchVisaoGeral]);
+  }, []); 
 
   const formatTemp = (t) =>
     (typeof t === 'number' && !Number.isNaN(t)) ? `${t.toFixed(1)}°C` : '--';
@@ -78,13 +109,11 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
              classeAnimacao = 'status-danger';
              icone = '🚨';
           } else if (dados.temp !== null && (dados.temp < 2.0 || dados.temp > 8.0)) {
-
              corStatus = '#eab308';
              statusLabel = 'ALERTA';
              classeAnimacao = 'status-warning';
              icone = '⚠️';
           } else {
-             // 3. Normal (Verde)
              corStatus = '#22c55e';
              statusLabel = score !== null ? `${score}% Saúde` : 'ESTÁVEL';
              classeAnimacao = 'status-ok';
@@ -139,6 +168,37 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                   <span style={{ fontSize: '0.8rem' }}>{item.id}</span>
                 </div>
               </div>
+              <div style={{ 
+                  marginTop: 15, 
+                  borderTop: '1px solid #eee', 
+                  paddingTop: 10, 
+                  display: 'flex', 
+                  justifyContent: 'space-between', 
+                  alignItems: 'center' 
+              }}>
+                <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                    Modo Remoto
+                </span>
+                
+                <button
+                    onClick={(e) => toggleManutencao(item.id, dados?.emManutencao, e)}
+                    style={{
+                        backgroundColor: dados?.emManutencao ? '#22c55e' : '#cbd5e1',
+                        color: dados?.emManutencao ? 'white' : '#64748b',
+                        border: 'none',
+                        borderRadius: '20px',
+                        padding: '5px 15px',
+                        cursor: 'pointer',
+                        fontWeight: 'bold',
+                        fontSize: '0.75rem',
+                        transition: 'background-color 0.3s',
+                        boxShadow: dados?.emManutencao ? '0 2px 5px rgba(34, 197, 94, 0.4)' : 'none'
+                    }}
+                >
+                    {dados?.emManutencao ? 'ONLINE (TWIN)' : 'AUTO (ECO)'}
+                </button>
+              </div>
+
             </div>
           );
         })}

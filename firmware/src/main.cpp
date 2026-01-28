@@ -24,7 +24,8 @@
 
 const int CAPACIDADE_MEMORIA_MENSAGENS = 400;
 const int LIMITE_LUZ_ALARME = 600;            
-const float LIMITE_VARIACAO_TEMP = 2.0;       
+const float LIMITE_VARIACAO_TEMP = 2.0;      
+bool modoManutencao = false; // Se true, não desliga o WiFi 
 
 
 WiFiClient espClient;
@@ -140,16 +141,17 @@ void callback(char* topic, byte* payload, unsigned int length) {
   DeserializationError error = deserializeJson(doc, message);
 
   if (!error) {
-    if (doc.containsKey("status_operacional")) {
-        boxStatus = doc["status_operacional"].as<String>();
-        Serial.print("Status recebido: "); Serial.println(boxStatus);
-    } 
-    
     if (doc.containsKey("comando")) {
         String cmd = doc["comando"].as<String>();
-        if (cmd == "SYNC") {
-            Serial.println("!!! COMANDO REMOTO DE SYNC !!!");
-            forcarSincronizacao = true; 
+
+        if (cmd == "MANUTENCAO_ON") {
+            Serial.println("!!! MODO MANUTENCAO ATIVADO: WIFI FICARA LIGADO !!!");
+            modoManutencao = true;
+            setRGB(1, 0, 0); 
+        }
+        else if (cmd == "MANUTENCAO_OFF") {
+            Serial.println("!!! MODO MANUTENCAO DESATIVADO: VOLTANDO A ECONOMIA !!!");
+            modoManutencao = false;
         }
     }
   }
@@ -202,6 +204,20 @@ void checkResetButton() {
 }
 
 void gerenciarConexao(bool precisaSincronizar, bool emergencia, bool comandoSync) {
+
+  if (modoManutencao) {
+    if (!wifiLigado) {
+        WiFi.mode(WIFI_STA);
+        WiFi.begin();
+        wifiLigado = true;
+    }
+    if (WiFi.status() == WL_CONNECTED && !client.connected()) {
+         if (client.connect(box_id)) {
+           client.subscribe(topicComando.c_str());
+         }
+    }
+    return; 
+  }
   if (precisaSincronizar || emergencia || comandoSync) {
     if (!wifiLigado) {
       Serial.println(">>> LIGANDO WIFI (Necessario Sync/Emergencia) <<<");
@@ -328,10 +344,18 @@ void setup() {
 
 void loop() {
   checkResetButton();
+  if (modoManutencao && wifiLigado) {
+      if (!client.connected()) {
+          if (client.connect(box_id)) {
+             client.subscribe(topicComando.c_str());
+          }
+      }
+      client.loop();
+  }
+
   
   if (wifiLigado) {
     client.loop(); 
-
     if (client.connected() && !offlineBuffer.empty()) {
        Serial.println("--- [SYNC EM ANDAMENTO] ---");
        while (!offlineBuffer.empty() && client.connected()) {
@@ -357,19 +381,19 @@ void loop() {
   if (now - lastSensorRead > INTERVALO_LEITURA_TELA) {
       lastSensorRead = now;
 
-      setRGB(0,0,0);
+      setRGB(0,0,0); 
       delay(5); 
       int luz = analogRead(PIN_LDR); 
-
       int bateriaPct = lerBateria();
 
       float temp = dht.readTemperature();
       bool erroSensor = isnan(temp);
       if (erroSensor) temp = 0.0;
-      
+
       bool caixaViolada = (luz < LIMITE_LUZ_ALARME);
       bool variacaoBrusca = (!erroSensor && abs(temp - ultimaTempEnviada) > LIMITE_VARIACAO_TEMP && ultimaTempEnviada != -999.0);
       modoEmergencia = (caixaViolada || variacaoBrusca);
+
       bool emergenciaValida = (modoEmergencia && (now - lastMsgEmergencia > 5000));
 
       bool horaDeMedir = (now - lastMedicao > intervaloMedicaoReal);     
@@ -379,9 +403,19 @@ void loop() {
       gerenciarConexao(horaDeSync || memoriaCheia, emergenciaValida, forcarSincronizacao);
       
       atualizarHardware(wifiLigado, erroSensor, luz);
-      drawScreen(temp, luz, offlineBuffer.size(), wifiLigado, erroSensor, bateriaPct);
+      if(modoManutencao) {
+        display.clearDisplay();
+        display.setTextSize(1);
+        display.setTextColor(SSD1306_WHITE);
+        display.setCursor(0,0); display.print("MODO REMOTO");
+        display.setCursor(0,15); display.print("WIFI ATIVO");
+        display.setCursor(0,30); display.print(temp); display.print(" C");
+        display.display();
+      } else {
+        drawScreen(temp, luz, offlineBuffer.size(), wifiLigado, erroSensor, bateriaPct);
+      }
 
-      if (horaDeMedir || emergenciaValida || forcarSincronizacao) {
+      if (horaDeMedir || emergenciaValida || forcarSincronizacao || (modoManutencao && horaDeMedir)) {
         
         if (horaDeMedir) {
            lastMedicao = now;
@@ -398,6 +432,8 @@ void loop() {
         
         if (modoEmergencia) doc["alerta"] = "EVENTO_CRITICO"; 
         if (forcarSincronizacao) doc["tipo"] = "SYNC_MANUAL";
+
+        if (modoManutencao) doc["modo"] = "MANUTENCAO_ONLINE";
 
         char buffer[256];
         serializeJson(doc, buffer);

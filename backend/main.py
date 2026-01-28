@@ -4,6 +4,7 @@ from influxdb_client import InfluxDBClient, Point
 from influxdb_client.client.write_api import SYNCHRONOUS
 import paho.mqtt.client as mqtt
 import os
+from pydantic import BaseModel
 import json
 import time
 import threading
@@ -152,6 +153,24 @@ def login(dados: dict):
         return {"token": "token-simples-jwt-fake", "nome": usuario}
     
     raise HTTPException(status_code=401, detail="Credenciais inválidas")
+class ComandoControl(BaseModel):
+    comando: str
+    
+@app.post("/controle/{lote}")
+def enviar_comando(lote: str, dados: ComandoControl):
+    topic = f"vasafe/{lote}/comando"
+    
+    payload_dict = {
+        "comando": dados.comando,
+        "timestamp": time.time()
+    }
+    payload_str = json.dumps(payload_dict)
+
+    try:
+        mqtt_client.publish(topic, payload_str, qos=1, retain=True)
+        return {"status": "sucesso", "mensagem": f"Comando {dados.comando} enviado para fila."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/analise/{lote}")
 def analise_lote(lote: str):
