@@ -10,6 +10,7 @@
 #include <WiFiManager.h> 
 #include <Preferences.h> 
 
+// --- DEFINIÇÕES DE PINS E HARDWARE ---
 #define SCREEN_WIDTH 128
 #define SCREEN_HEIGHT 64
 #define PIN_DHT        15  
@@ -21,10 +22,12 @@
 #define PIN_CONFIG_BTN 0   
 #define PIN_BATTERY    35  
 
+// --- CONSTANTES ---
 const int CAPACIDADE_MEMORIA_MENSAGENS = 400;
 const int LIMITE_LUZ_ALARME = 600;            
 const float LIMITE_VARIACAO_TEMP = 2.0;      
 
+// --- VARIÁVEIS GLOBAIS ---
 bool modoManutencao = false; 
 bool wifiLigado = true; 
 bool forcarSincronizacao = false; 
@@ -65,6 +68,7 @@ const int INTERVALO_LEITURA_TELA = 1000;
 float ultimaTempEnviada = -999.0;
 String boxStatus = "AGUARDANDO"; 
 
+// --- FUNÇÕES AUXILIARES ---
 
 void setRGB(int r, int g, int b) {
   digitalWrite(PIN_RGB_R, r);
@@ -73,7 +77,7 @@ void setRGB(int r, int g, int b) {
 }
 
 void desligarWifiImediatamente() {
-  Serial.println(">>> [AÇÃO] DESLIGANDO WIFI IMEDIATAMENTE <<<");
+  Serial.println(">>> [AÇÃO] DESLIGANDO WIFI (Economia) <<<");
   
   if (client.connected()) {
     client.disconnect();
@@ -83,9 +87,6 @@ void desligarWifiImediatamente() {
   WiFi.mode(WIFI_OFF);
   
   wifiLigado = false;
-  if(!modoManutencao) {
-  }
-  
   lastConnectionTime = millis(); 
   lastSync = millis(); 
   
@@ -110,6 +111,18 @@ void drawScreen(float temp, int luz, int bufferSize, bool wifiOn, bool erro, int
   display.clearDisplay();
   display.setTextColor(SSD1306_WHITE);
 
+  // Se estiver em modo manutenção, mostra tela especial
+  if (modoManutencao) {
+      display.setTextSize(1);
+      display.setCursor(0,0); display.print("MODO REMOTO (ATIVO)");
+      display.setCursor(0,15); display.print("WIFI: LIGADO");
+      display.setCursor(0,30); display.print("Temp: "); display.print(temp, 1);
+      display.setCursor(0,45); display.print("Recebendo cmds...");
+      display.display();
+      return;
+  }
+
+  // Tela Normal
   display.setTextSize(1);
   display.setCursor(0, 0);
   if (erro) display.print("ERRO SENSOR");
@@ -145,6 +158,7 @@ void drawScreen(float temp, int luz, int bufferSize, bool wifiOn, bool erro, int
   display.display();
 }
 
+// --- CALLBACK MQTT CORRIGIDO ---
 void callback(char* topic, byte* payload, unsigned int length) {
   String message = "";
   for (unsigned int i = 0; i < length; i++) {
@@ -154,15 +168,19 @@ void callback(char* topic, byte* payload, unsigned int length) {
   Serial.print("--- [COMANDO RECEBIDO] --- ");
   Serial.println(message);
   
+  // AQUI ESTAVA O ERRO: Não desligue o WiFi aqui dentro! Apenas mude a variável.
   if (message.indexOf("MANUTENCAO_ON") >= 0) {
-      Serial.println("!!! MODO MANUTENCAO ATIVADO: WIFI FICARA LIGADO !!!");
+      Serial.println("!!! ATIVANDO MODO MANUTENCAO !!!");
       modoManutencao = true;
       setRGB(1, 0, 0); 
   }
   else if (message.indexOf("MANUTENCAO_OFF") >= 0) {
-      Serial.println("!!! MODO MANUTENCAO DESATIVADO: VOLTANDO A ECONOMIA !!!");
+      Serial.println("!!! DESATIVANDO MODO MANUTENCAO - VOLTANDO P/ ECONOMIA !!!");
       modoManutencao = false; 
-      desligarWifiImediatamente();
+      
+      // Resetamos o timer de conexão para dar tempo do ESP enviar o ACK (confirmação)
+      // antes da função gerenciarConexao() desligar o WiFi por timeout.
+      lastConnectionTime = millis(); 
   }
 }
 
@@ -181,18 +199,18 @@ void atualizarHardware(bool online, bool erroSensor, int luz) {
     }
   }
   else if (modoManutencao) {
-      setRGB(1, 0, 0);
+      setRGB(1, 0, 0); // Vermelho fixo em manutenção
   }
   else if (online) {
     if (forcarSincronizacao) {
         if ((currentMillis / 100) % 2 == 0) setRGB(0, 1, 0);
         else setRGB(0, 0, 0);
     } else {
-        setRGB(0, 1, 0);
+        setRGB(0, 1, 0); // Verde se estiver enviando dados
     }
   }
   else {
-    setRGB(0, 0, 0); 
+    setRGB(0, 0, 0); // Apagado em modo economia
   }
 }
 
@@ -215,13 +233,17 @@ void checkResetButton() {
   }
 }
 
+// --- GERENCIADOR DE CONEXÃO CORRIGIDO ---
 void gerenciarConexao(bool precisaSincronizar, bool emergencia, bool comandoSync) {
 
+  // 1. Lógica PRIORITÁRIA: Modo Manutenção
   if (modoManutencao) {
+    // Se o WiFi caiu ou estava desligado, religa imediatamente
     if (!wifiLigado) {
         Serial.println(">>> [MANUTENCAO] RELIGANDO WIFI...");
         WiFi.mode(WIFI_STA);
         WiFi.begin();
+        
         int attempts = 0;
         while(WiFi.status() != WL_CONNECTED && attempts < 20) {
             delay(500); Serial.print("."); attempts++;
@@ -231,42 +253,41 @@ void gerenciarConexao(bool precisaSincronizar, bool emergencia, bool comandoSync
         if (WiFi.status() == WL_CONNECTED) {
             wifiLigado = true;
             Serial.println("WiFi Conectado (Manutencao)!");
-        } else {
-             Serial.println("Falha WiFi (Manutencao)");
         }
     }
     
+    // Mantém MQTT conectado
     if (wifiLigado && WiFi.status() == WL_CONNECTED && !client.connected()) {
          if (client.connect(box_id)) {
            client.subscribe(topicComando.c_str());
            Serial.println("MQTT Reconectado (Manutencao)");
          }
     }
-    return; 
+    return; // Sai da função para não entrar na lógica de economia
   }
 
+  // 2. Lógica: Modo Economia (Normal)
+  // Se chegamos aqui, modoManutencao é FALSE.
+
   if (precisaSincronizar || emergencia || comandoSync) {
-    
+    // Precisa conectar para enviar dados
     if (!wifiLigado) {
       Serial.println(">>> LIGANDO WIFI (Necessario Sync/Emergencia) <<<");
       WiFi.mode(WIFI_STA); 
       WiFi.begin();        
 
       int tentativas = 0;
-      Serial.print("Aguardando IP");
       while (WiFi.status() != WL_CONNECTED && tentativas < 20) { 
-          delay(500);
-          Serial.print(".");
-          tentativas++;
+          delay(500); Serial.print("."); tentativas++;
       }
       Serial.println();
 
       if (WiFi.status() == WL_CONNECTED) {
           wifiLigado = true;
           lastConnectionTime = millis();
-          Serial.println("WiFi Conectado com Sucesso!");
+          Serial.println("WiFi Conectado!");
       } else {
-          Serial.println("ERRO: Timeout ao conectar WiFi.");
+          Serial.println("ERRO: Timeout WiFi.");
           WiFi.disconnect(true);
           WiFi.mode(WIFI_OFF);
           wifiLigado = false;
@@ -278,16 +299,17 @@ void gerenciarConexao(bool precisaSincronizar, bool emergencia, bool comandoSync
        if (client.connect(box_id)) {
          client.subscribe(topicComando.c_str());
          Serial.println("MQTT Conectado!");
-       } else {
-         Serial.print("Falha MQTT rc=");
-         Serial.println(client.state());
        }
     }
   } 
-  else if (wifiLigado && offlineBuffer.empty() && !comandoSync && !emergencia) {
-     if (millis() - lastConnectionTime > 5000) { 
-       Serial.println(">>> DESLIGANDO WIFI (Economia - Timeout) <<<");
-       desligarWifiImediatamente();
+  // 3. Lógica de Desligamento (Timeout)
+  else if (wifiLigado) {
+     // Se não tem nada pendente no buffer E não é emergencia E o tempo passou
+     if (offlineBuffer.empty() && !comandoSync && !emergencia) {
+         if (millis() - lastConnectionTime > 5000) { 
+           // 5 segundos de espera antes de desligar (dá tempo de receber o OFF e processar)
+           desligarWifiImediatamente();
+         }
      }
   }
 }
@@ -389,6 +411,7 @@ void setup() {
 void loop() {
   checkResetButton();
 
+  // Garante processamento MQTT se WiFi estiver ligado
   if (wifiLigado && WiFi.status() == WL_CONNECTED) {
       if (!client.connected()) {
           if (client.connect(box_id)) {
@@ -398,6 +421,7 @@ void loop() {
       client.loop(); 
   }
 
+  // Lógica de Sync (Esvaziar buffer)
   if (wifiLigado && client.connected() && !offlineBuffer.empty()) {
         Serial.println("--- [SYNC EM ANDAMENTO] ---");
         while (!offlineBuffer.empty() && client.connected()) {
@@ -410,7 +434,7 @@ void loop() {
            delay(50);     
         }
         lastSync = millis(); 
-        lastConnectionTime = millis(); 
+        lastConnectionTime = millis(); // Renova timeout para não cair a conexão no meio
         
         if (offlineBuffer.empty() && forcarSincronizacao) {
             Serial.println("Comando Sync Concluido!");
@@ -439,23 +463,16 @@ void loop() {
       bool horaDeSync  = (now - lastSync > intervaloSincronizacaoReal);  
       bool memoriaCheia = (offlineBuffer.size() > (CAPACIDADE_MEMORIA_MENSAGENS * 0.9));
 
+      // Lógica Principal de Controle do WiFi
       gerenciarConexao(horaDeSync || memoriaCheia, emergenciaValida, forcarSincronizacao);
       
       atualizarHardware(wifiLigado, erroSensor, luz);
 
-      if(modoManutencao) {
-        display.clearDisplay();
-        display.setTextSize(1);
-        display.setTextColor(SSD1306_WHITE);
-        display.setCursor(0,0); display.print("MODO REMOTO");
-        display.setCursor(0,15); display.print("WIFI ATIVO");
-        display.setCursor(0,30); display.print(temp); display.print(" C");
-        display.display();
-      } else {
-        drawScreen(temp, luz, offlineBuffer.size(), wifiLigado, erroSensor, bateriaPct);
-      }
+      drawScreen(temp, luz, offlineBuffer.size(), wifiLigado, erroSensor, bateriaPct);
       
       bool deveGravar = horaDeMedir || emergenciaValida || forcarSincronizacao;
+      
+      // Em modo manutenção, sempre enviamos dados para o painel ficar "vivo"
       if (modoManutencao) deveGravar = true; 
 
       if (deveGravar) {
@@ -485,6 +502,7 @@ void loop() {
           Serial.print("[ONLINE] Enviando: "); Serial.println(buffer);
           client.publish(topicTelemetria.c_str(), buffer);
         } else {
+          // Só guarda no buffer se NÃO estiver em manutenção (manutenção é tempo real ou nada)
           if (!modoManutencao) {
              Serial.print("[BUFFER] "); Serial.println(buffer);
              if (offlineBuffer.size() >= CAPACIDADE_MEMORIA_MENSAGENS) {

@@ -253,15 +253,14 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                 <div style={styles.btnGroup}>
                     <button 
                         style={styles.btnAction('ON', isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
-                        onClick={(e) => !isManutencao && !isOfflineOrAguardando && enviarComandoManutencao(item.id, 'ON', e)}
+                        onClick={(e) => enviarComandoManutencao(item.id, 'ON', e)}
                         disabled={isManutencao || isOfflineOrAguardando || isLoadingSwitch}
                     >
                         ATIVAR
                     </button>
-
                     <button 
                         style={styles.btnAction('OFF', !isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
-                        onClick={(e) => isManutencao && !isOfflineOrAguardando && enviarComandoManutencao(item.id, 'OFF', e)}
+                        onClick={(e) => enviarComandoManutencao(item.id, 'OFF', e)}
                         disabled={!isManutencao || isOfflineOrAguardando || isLoadingSwitch}
                     >
                         DESATIVAR
