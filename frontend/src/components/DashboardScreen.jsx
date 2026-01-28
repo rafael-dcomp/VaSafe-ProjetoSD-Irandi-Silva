@@ -2,12 +2,12 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import axios from 'axios'
 
 const API_URL = "http://98.90.117.5:8000"
-
 const STORAGE_KEY = 'lote_pending_actions'
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({})
 
+  // pendingActions armazena: { [id]: { target: boolean, timestamp: number } }
   const [pendingActions, setPendingActions] = useState(() => {
     try {
       const saved = localStorage.getItem(STORAGE_KEY)
@@ -17,6 +17,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
     }
   })
 
+  // Salva persistência no LocalStorage
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY, JSON.stringify(pendingActions))
   }, [pendingActions])
@@ -27,13 +28,14 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       gap: '8px',
       marginTop: '4px'
     },
-    btnAction: (tipo, isActive, disabled, isProcessing) => {
+    btnAction: (tipo, isActive, disabled, isSelfProcessing) => {
       const colorGreen = '#22c55e'
       const colorRed = '#ef4444'
       const colorGray = '#94a3b8'
       let baseColor = tipo === 'ON' ? colorGreen : colorRed
 
-      if (isProcessing) {
+      // Se ESTE botão específico está processando
+      if (isSelfProcessing) {
          return {
           flex: 1,
           padding: '6px 0',
@@ -63,6 +65,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         fontSize: '0.7rem',
         fontWeight: 'bold'
       }
+      
       if (isActive) return {
         flex: 1,
         padding: '6px 0',
@@ -75,6 +78,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         fontWeight: 'bold',
         boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
       }
+      
       return {
         flex: 1,
         padding: '6px 0',
@@ -106,6 +110,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const fetchVisaoGeral = useCallback(async () => {
     const t = Date.now()
     
+    // Limpeza de ações pendentes velhas (> 45s)
     setPendingActions(prev => {
       const now = Date.now()
       let changed = false
@@ -167,20 +172,23 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         const pending = pendingActions[id]
 
         if (pending) {
+          // Se o servidor já obedeceu o comando (Sincronizado)
           if (data.modoBackend === pending.target) {
              actionsToClear.push(id)
-             newState[id] = { ...data, emManutencao: data.modoBackend, isProcessing: false }
+             newState[id] = { ...data, emManutencao: data.modoBackend, pendingTarget: null }
           } else {
+             // Ainda não obedeceu, mantemos a UI otimista mas "Processando"
              newState[id] = { 
                ...data, 
-               emManutencao: pending.target,
-               isProcessing: true 
+               emManutencao: pending.target, 
+               pendingTarget: pending.target // Marca qual é o alvo pendente
              }
           }
         } else {
-          newState[id] = { ...data, emManutencao: data.modoBackend, isProcessing: false }
+          newState[id] = { ...data, emManutencao: data.modoBackend, pendingTarget: null }
         }
       })
+
       if (actionsToClear.length > 0) {
         setTimeout(() => {
           setPendingActions(current => {
@@ -209,25 +217,29 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
   const enviarComandoManutencao = async (boxId, comandoTipo, e) => {
     if (e && e.stopPropagation) e.stopPropagation()
-
-    if (resumoEstoque[boxId]?.isProcessing) return
+    
+    // NÃO BLOQUEIAMOS mais se já estiver processando.
+    // Permitimos a troca de comando.
 
     const comando = comandoTipo === 'ON' ? "MANUTENCAO_ON" : "MANUTENCAO_OFF"
     const targetStatus = comandoTipo === 'ON'
 
+    // Atualiza a pendência (se já existia uma contrária, sobrescreve)
     setPendingActions(prev => ({
       ...prev,
       [boxId]: { target: targetStatus, timestamp: Date.now() }
     }))
 
+    // Atualiza UI imediata
     setResumoEstoque(prev => ({ 
         ...prev, 
-        [boxId]: { ...prev[boxId], emManutencao: targetStatus, isProcessing: true } 
+        [boxId]: { ...prev[boxId], emManutencao: targetStatus, pendingTarget: targetStatus } 
     }))
 
     try {
       await postWithRetries(`${API_URL}/controle/${boxId}`, { comando }, 3)
     } catch (error) {
+      // Se falhar rede, removemos pendência
       setPendingActions(prev => {
         const copy = { ...prev }
         delete copy[boxId]
@@ -239,7 +251,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
   useEffect(() => {
     fetchVisaoGeral()
-    const id = setInterval(fetchVisaoGeral, 2000) 
+    const id = setInterval(fetchVisaoGeral, 2000)
     return () => clearInterval(id)
   }, [fetchVisaoGeral])
 
@@ -251,7 +263,11 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       <div className="caixa-grid">
         {(estoqueConfig || []).map((item) => {
           const dados = resumoEstoque[item.id]
-          const isProcessing = dados?.isProcessing || false
+          
+          // Lógica de Processamento refinada:
+          // pendingTarget é true (ON), false (OFF) ou null (Nenhum)
+          const pendingTarget = dados?.pendingTarget
+          const isProcessingAny = pendingTarget !== undefined && pendingTarget !== null
           
           let corStatus = '#cbd5e1'
           let statusLabel = 'AGUARDANDO'
@@ -283,6 +299,20 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
           const isOfflineOrAguardando = dados?.erro === true || dados?.status_operacional === 'AGUARDANDO' || dados?.status_operacional === 'OFFLINE'
           const isManutencao = dados?.emManutencao || false
+
+          // --- LÓGICA DOS BOTÕES ---
+          
+          // Botão ON:
+          // - Processando (girando) se o alvo pendente for TRUE
+          // - Desabilitado se: Estiver offline OU (já estiver ON E não estiver pendente troca)
+          const isProcessingOn = pendingTarget === true
+          const disabledOn = isOfflineOrAguardando || (isManutencao && !isProcessingAny) || isProcessingOn
+
+          // Botão OFF:
+          // - Processando (girando) se o alvo pendente for FALSE
+          // - Desabilitado se: (!estiver ON E não estiver pendente troca)
+          const isProcessingOff = pendingTarget === false
+          const disabledOff = (!isManutencao && !isProcessingAny) || isProcessingOff
 
           return (
             <div
@@ -323,24 +353,24 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                     <span style={{ fontSize: '0.75rem', fontWeight: 'bold', color: '#334155' }}>
                         CONEXÃO TEMPO REAL
                     </span>
-                    <span style={{ fontSize: '0.65rem', color: isProcessing ? '#f59e0b' : (isManutencao ? '#22c55e' : '#94a3b8'), fontWeight: isProcessing ? 'bold' : 'normal' }}>
-                        {isProcessing ? 'Sincronizando com ESP...' : (isManutencao ? 'Ativo' : 'Inativo')}
+                    <span style={{ fontSize: '0.65rem', color: isProcessingAny ? '#f59e0b' : (isManutencao ? '#22c55e' : '#94a3b8'), fontWeight: isProcessingAny ? 'bold' : 'normal' }}>
+                        {isProcessingAny ? 'Sincronizando com ESP...' : (isManutencao ? 'Ativo' : 'Inativo')}
                     </span>
                 </div>
                 <div style={styles.btnGroup}>
                     <button
-                        style={styles.btnAction('ON', isManutencao, isOfflineOrAguardando, isProcessing)}
+                        style={styles.btnAction('ON', isManutencao, disabledOn, isProcessingOn)}
                         onClick={(e) => enviarComandoManutencao(item.id, 'ON', e)}
-                        disabled={isManutencao || isOfflineOrAguardando || isProcessing}
+                        disabled={disabledOn}
                     >
-                        {isProcessing && !isManutencao ? '...' : 'ATIVAR'}
+                        {isProcessingOn ? '...' : 'ATIVAR'}
                     </button>
                     <button
-                        style={styles.btnAction('OFF', !isManutencao, isOfflineOrAguardando, isProcessing)}
+                        style={styles.btnAction('OFF', !isManutencao, disabledOff, isProcessingOff)}
                         onClick={(e) => enviarComandoManutencao(item.id, 'OFF', e)}
-                        disabled={!isManutencao || isProcessing}
+                        disabled={disabledOff}
                     >
-                        {isProcessing && isManutencao ? '...' : 'DESATIVAR'}
+                        {isProcessingOff ? '...' : 'DESATIVAR'}
                     </button>
                 </div>
               </div>
