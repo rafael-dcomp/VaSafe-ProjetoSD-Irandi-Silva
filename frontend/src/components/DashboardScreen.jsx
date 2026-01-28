@@ -7,9 +7,10 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const [resumoEstoque, setResumoEstoque] = useState({});
   const [loadingStates, setLoadingStates] = useState({});
   
-  // Ref para controlar quais caixas estão sendo alteradas manualmente pelo usuário.
-  // Isso impede que o 'setInterval' sobrescreva o botão enquanto a ação processa.
-  const actionPendingRef = useRef({});
+  // MUDANÇA PRINCIPAL: 
+  // Este Ref agora guarda o valor EXATO (true/false) que o usuário escolheu.
+  // Se tiver valor aqui, ignoramos o servidor completamente.
+  const forcedStatusRef = useRef({});
 
   const styles = {
     btnGroup: {
@@ -24,7 +25,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
       let baseColor = tipo === 'ON' ? colorGreen : colorRed;
       
-      // Estado Desabilitado (Visual)
       if (disabled && !isActive) return {
         flex: 1,
         padding: '6px 0',
@@ -38,7 +38,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         fontWeight: 'bold'
       };
 
-      // Estado Ativo (Botão Selecionado)
       if (isActive) {
         return {
           flex: 1,
@@ -54,7 +53,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         };
       }
 
-      // Estado Normal (Botão clicável mas não selecionado)
       return {
         flex: 1,
         padding: '6px 0',
@@ -81,7 +79,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         const tele = res.data?.telemetria ?? {};
         const ultimoDado = tele.historico && tele.historico.length > 0 ? tele.historico[0] : {};
         
-        // Verifica se o modo manutenção está ativo no backend
         const modoBackendAtivo = ultimoDado.modo === "MANUTENCAO_ONLINE"; 
         
         return {
@@ -114,19 +111,16 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       const newState = { ...prevState };
       
       results.forEach(({ id, data }) => {
-        // AQUI ESTÁ A CORREÇÃO:
-        // Se o usuário clicou no botão recentemente (actionPendingRef é true),
-        // ignoramos o que vem do servidor sobre o modo manutenção e mantemos o que está na tela.
-        // Isso evita que o botão "pisque" ou volte ao estado anterior enquanto processa.
-        const isUserInteracting = actionPendingRef.current[id];
-        
-        const statusManutencaoFinal = isUserInteracting 
-            ? (prevState[id]?.emManutencao ?? false) // Mantém estado local
-            : data.modoBackend; // Usa estado do servidor
+        // LÓGICA CORRIGIDA:
+        // Verifica se existe um status forçado (pelo clique do usuário)
+        const forcedStatus = forcedStatusRef.current[id];
+
+        // Se forcedStatus não for undefined, usamos ele. Se for undefined, usamos o dado do servidor.
+        const statusFinal = (forcedStatus !== undefined) ? forcedStatus : data.modoBackend;
 
         newState[id] = {
           ...data,
-          emManutencao: statusManutencaoFinal
+          emManutencao: statusFinal
         };
       });
       
@@ -137,17 +131,19 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
   const enviarComandoManutencao = async (boxId, comandoTipo, e) => {
     e.stopPropagation();
 
-    // Evita clique duplo
     if (loadingStates[boxId]) return;
 
     const comando = comandoTipo === 'ON' ? "MANUTENCAO_ON" : "MANUTENCAO_OFF";
+    // Aqui define true ou false corretamente
     const novoStatusBooleano = comandoTipo === 'ON';
 
-    // 1. Bloqueia atualizações do servidor para esta caixa
-    actionPendingRef.current[boxId] = true;
     setLoadingStates(prev => ({ ...prev, [boxId]: true }));
 
-    // 2. Atualização Otimista (Muda a cor do botão imediatamente)
+    // 1. FORÇA O STATUS NO REF IMEDIATAMENTE
+    // Isso impede que o fetchVisaoGeral sobrescreva com dados antigos do servidor
+    forcedStatusRef.current[boxId] = novoStatusBooleano;
+
+    // 2. Atualização Visual Otimista
     setResumoEstoque(prev => ({
       ...prev,
       [boxId]: {
@@ -160,24 +156,26 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       await axios.post(`${API_URL}/controle/${boxId}`, { comando });
       console.log(`Comando ${comando} enviado para ${boxId}`);
  
-      // 3. Aguarda um tempo antes de liberar a atualização do servidor.
-      // Isso é crucial para o "OFF", pois o dispositivo vai desligar o WiFi.
-      // Se liberarmos muito rápido, o servidor pode ainda achar que está ON.
+      // 3. Mantemos o status "travado" por 5 segundos.
+      // Isso dá tempo para o ESP32 receber, processar e o backend atualizar.
+      // Só depois de 5s voltamos a acreditar no que o servidor diz.
       setTimeout(() => {
-         delete actionPendingRef.current[boxId]; // Libera para receber dados do servidor
+         delete forcedStatusRef.current[boxId]; // Libera a trava
+         
          setLoadingStates(prev => {
              const copy = { ...prev };
              delete copy[boxId];
              return copy;
          });
-      }, 2500); // 2.5 segundos de "trava" visual
+      }, 5000); 
 
     } catch (error) {
       console.error("Erro ao enviar comando", error);
-      alert("Falha ao comunicar com o servidor.");
+      alert("Falha na conexão.");
       
-      // Reverte em caso de erro
-      delete actionPendingRef.current[boxId];
+      // Se der erro, liberamos a trava imediatamente e revertemos
+      delete forcedStatusRef.current[boxId];
+      
       setResumoEstoque(prev => ({
         ...prev,
         [boxId]: { ...prev[boxId], emManutencao: !novoStatusBooleano }
@@ -193,7 +191,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
 
   useEffect(() => {
     fetchVisaoGeral(); 
-    const id = setInterval(fetchVisaoGeral, 3000); // Atualiza a cada 3 segundos
+    const id = setInterval(fetchVisaoGeral, 3000);
     return () => clearInterval(id);
   }, [fetchVisaoGeral]);
 
@@ -222,7 +220,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
           }
 
           const isOfflineOrAguardando = dados?.erro === true || dados?.status_operacional === 'AGUARDANDO' || dados?.status_operacional === 'OFFLINE';
-          // O estado visual do botão depende do valor local otimista
           const isManutencao = dados?.emManutencao || false;
 
           return (
@@ -273,7 +270,6 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                 </div>
                 
                 <div style={styles.btnGroup}>
-                    {/* Botão ATIVAR */}
                     <button 
                         style={styles.btnAction('ON', isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
                         onClick={(e) => enviarComandoManutencao(item.id, 'ON', e)}
@@ -282,11 +278,9 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                         ATIVAR
                     </button>
                     
-                    {/* Botão DESATIVAR */}
                     <button 
                         style={styles.btnAction('OFF', !isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
                         onClick={(e) => enviarComandoManutencao(item.id, 'OFF', e)}
-                        // Só pode desativar se estiver em manutenção E não estiver carregando
                         disabled={!isManutencao || isLoadingSwitch}
                     >
                         DESATIVAR
