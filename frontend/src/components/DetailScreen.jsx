@@ -77,8 +77,13 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
   const isLoteInvalido = !isOffline && healthScore === 0;
   const isViolado = !isOffline && !isLoteInvalido && Boolean(telemetria.violacao);
   const isAberta = Boolean(telemetria.tampa_aberta);
+  
   const historicoRaw = Array.isArray(telemetria.historico) ? telemetria.historico.slice() : [];
   
+  // Lógica para detectar o modo (Economia vs Tempo Real)
+  const modoRaw = telemetria.modo || (historicoRaw.length > 0 ? historicoRaw[0].modo : '');
+  const isModoEconomia = typeof modoRaw === 'string' && modoRaw.toUpperCase().includes('MANUTENCAO_ON');
+
   const chartData = historicoRaw
     .map(d => ({
       ...d,
@@ -97,11 +102,12 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
 
   const getHeaderColor = () => {
     if (isOffline) return THEME.textMuted;
-    if (isLoteInvalido) return THEME.invalid; // Prioridade Alta: Lote Perdido
-    if (isViolado) return THEME.danger;       // Prioridade Média: Violação
-    if (isAberta) return THEME.warning;       // Prioridade Baixa: Alerta
-    return THEME.success;                     // Normal
+    if (isLoteInvalido) return THEME.invalid;
+    if (isViolado) return THEME.danger;
+    if (isAberta) return THEME.warning;
+    return THEME.success;
   };
+
   const getHeaderText = () => {
     if (isOffline) return 'OFFLINE';
     if (isLoteInvalido) return 'LOTE INVÁLIDO / PERDA TOTAL';
@@ -119,12 +125,33 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
           
           <div className="header-info">
             <h1>{caixaNome}</h1>
-            <span className="last-update">
-              {lastUpdate ? `Atualizado às ${lastUpdate.toLocaleTimeString()}` : '...'}
-            </span>
+            
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginTop: '4px', marginBottom: '4px' }}>
+              {/* Badge de Modo de Operação */}
+              <div style={{
+                display: 'inline-flex',
+                alignItems: 'center',
+                gap: '6px',
+                padding: '4px 10px',
+                borderRadius: '12px',
+                fontSize: '0.75rem',
+                fontWeight: '700',
+                backgroundColor: isModoEconomia ? '#fffbeb' : '#ecfdf5',
+                color: isModoEconomia ? '#b45309' : '#047857',
+                border: `1px solid ${isModoEconomia ? '#fcd34d' : '#6ee7b7'}`
+              }}>
+                <span>{isModoEconomia ? '⏸️' : '⚡'}</span>
+                {isModoEconomia ? 'MODO ECONOMIA' : 'TEMPO REAL'}
+              </div>
+
+              <span className="last-update">
+                {lastUpdate ? `Atualizado às ${lastUpdate.toLocaleTimeString()}` : '...'}
+              </span>
+            </div>
           </div>
         </div>
       </div>
+
       <div className="status-banner" style={{ borderLeft: `6px solid ${getHeaderColor()}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
           <h2 style={{ color: getHeaderColor(), margin: 0 }}>
