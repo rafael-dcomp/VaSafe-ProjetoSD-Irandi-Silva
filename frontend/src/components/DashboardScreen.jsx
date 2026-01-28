@@ -1,16 +1,13 @@
-import { useState, useEffect, useCallback, useRef } from 'react';
-import axios from 'axios';
+import { useState, useEffect, useCallback, useRef } from 'react'
+import axios from 'axios'
 
-const API_URL = "http://98.90.117.5:8000";
+const API_URL = "http://98.90.117.5:8000"
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
-  const [resumoEstoque, setResumoEstoque] = useState({});
-  const [loadingStates, setLoadingStates] = useState({});
-  
-  // MUDANÇA PRINCIPAL: 
-  // Este Ref agora guarda o valor EXATO (true/false) que o usuário escolheu.
-  // Se tiver valor aqui, ignoramos o servidor completamente.
-  const forcedStatusRef = useRef({});
+  const [resumoEstoque, setResumoEstoque] = useState({})
+  const [loadingStates, setLoadingStates] = useState({})
+  const forcedStatusRef = useRef({})
+  const forcedExpiryRef = useRef({})
 
   const styles = {
     btnGroup: {
@@ -19,12 +16,10 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
       marginTop: '4px'
     },
     btnAction: (tipo, isActive, disabled) => {
-      const colorGreen = '#22c55e';
-      const colorRed = '#ef4444';
-      const colorGray = '#94a3b8';
-
-      let baseColor = tipo === 'ON' ? colorGreen : colorRed;
-      
+      const colorGreen = '#22c55e'
+      const colorRed = '#ef4444'
+      const colorGray = '#94a3b8'
+      let baseColor = tipo === 'ON' ? colorGreen : colorRed
       if (disabled && !isActive) return {
         flex: 1,
         padding: '6px 0',
@@ -36,23 +31,19 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         opacity: 0.5,
         fontSize: '0.7rem',
         fontWeight: 'bold'
-      };
-
-      if (isActive) {
-        return {
-          flex: 1,
-          padding: '6px 0',
-          borderRadius: '6px',
-          border: `1px solid ${baseColor}`,
-          backgroundColor: baseColor,
-          color: 'white',
-          cursor: 'default', 
-          fontSize: '0.7rem',
-          fontWeight: 'bold',
-          boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
-        };
       }
-
+      if (isActive) return {
+        flex: 1,
+        padding: '6px 0',
+        borderRadius: '6px',
+        border: `1px solid ${baseColor}`,
+        backgroundColor: baseColor,
+        color: 'white',
+        cursor: 'default',
+        fontSize: '0.7rem',
+        fontWeight: 'bold',
+        boxShadow: '0 2px 4px rgba(0,0,0,0.1)'
+      }
       return {
         flex: 1,
         padding: '6px 0',
@@ -65,163 +56,176 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
         fontSize: '0.7rem',
         fontWeight: 'bold',
         transition: 'all 0.2s'
-      };
+      }
     }
-  };
+  }
+
+  const normalizeModo = (v) => {
+    if (!v || typeof v !== 'string') return null
+    const s = v.trim().toUpperCase()
+    if (s.includes('MANUTENCAO')) {
+      if (s.includes('ON') || s.includes('ONLINE')) return true
+      if (s.includes('OFF')) return false
+    }
+    if (s.includes('ON')) return true
+    if (s.includes('OFF')) return false
+    return null
+  }
 
   const fetchVisaoGeral = useCallback(async () => {
-    const t = Date.now();
-
+    const t = Date.now()
     const promises = (estoqueConfig || []).map(async (item) => {
       try {
-        const res = await axios.get(`${API_URL}/analise/${item.id}?t=${t}`);
-        const analise = res.data?.analise_risco ?? {};
-        const tele = res.data?.telemetria ?? {};
-        const ultimoDado = tele.historico && tele.historico.length > 0 ? tele.historico[0] : {};
-        
-        const modoBackendAtivo = ultimoDado.modo === "MANUTENCAO_ONLINE"; 
-        
+        const res = await axios.get(`${API_URL}/analise/${item.id}?t=${t}`)
+        const analise = res.data?.analise_risco ?? {}
+        const tele = res.data?.telemetria ?? {}
+        const ultimoDado = Array.isArray(tele.historico) && tele.historico.length > 0 ? tele.historico[0] : {}
+        const modoFromServer = normalizeModo(ultimoDado.modo ?? tele.modo ?? '')
         return {
           id: item.id,
           data: {
             score: analise.health_score ?? null,
             status_operacional: analise.status_operacional ?? null,
-            temp: typeof tele.temperatura_atual === 'number' ? tele.temperatura_atual : null,
+            temp: typeof tele.temperatura_atual === 'number' ? tele.temperatura_atual : (typeof tele.temperatura === 'number' ? tele.temperatura : null),
             violacao: tele?.violacao ?? false,
-            tampa_aberta: tele?.tampa_aberta ?? false,
-            historico: tele?.historico ?? [],
+            tampa_aberta: tele?.tampa_aberta ?? tele?.aberta ?? false,
+            historico: Array.isArray(tele?.historico) ? tele.historico : [],
             erro: false,
-            modoBackend: modoBackendAtivo 
+            modoBackend: modoFromServer
           }
-        };
+        }
       } catch (err) {
         return {
           id: item.id,
           data: {
-            score: null, status_operacional: null, temp: null, violacao: false, tampa_aberta: false, historico: [], erro: true,
+            score: null,
+            status_operacional: null,
+            temp: null,
+            violacao: false,
+            tampa_aberta: false,
+            historico: [],
+            erro: true,
             modoBackend: false
           }
-        };
+        }
       }
-    });
-
-    const results = await Promise.all(promises);
-
+    })
+    const results = await Promise.all(promises)
     setResumoEstoque(prevState => {
-      const newState = { ...prevState };
-      
+      const newState = { ...prevState }
+      const now = Date.now()
       results.forEach(({ id, data }) => {
-        // LÓGICA CORRIGIDA:
-        // Verifica se existe um status forçado (pelo clique do usuário)
-        const forcedStatus = forcedStatusRef.current[id];
+        const forced = forcedStatusRef.current[id]
+        const expiry = forcedExpiryRef.current[id] || 0
+        if (forced !== undefined) {
+          const serverModo = data.modoBackend
+          if (serverModo === forced) {
+            delete forcedStatusRef.current[id]
+            delete forcedExpiryRef.current[id]
+            newState[id] = { ...data, emManutencao: serverModo }
+          } else if (now > expiry) {
+            delete forcedStatusRef.current[id]
+            delete forcedExpiryRef.current[id]
+            newState[id] = { ...data, emManutencao: data.modoBackend }
+          } else {
+            newState[id] = { ...data, emManutencao: forced }
+          }
+        } else {
+          newState[id] = { ...data, emManutencao: data.modoBackend }
+        }
+      })
+      return newState
+    })
+  }, [estoqueConfig])
 
-        // Se forcedStatus não for undefined, usamos ele. Se for undefined, usamos o dado do servidor.
-        const statusFinal = (forcedStatus !== undefined) ? forcedStatus : data.modoBackend;
-
-        newState[id] = {
-          ...data,
-          emManutencao: statusFinal
-        };
-      });
-      
-      return newState;
-    });
-  }, [estoqueConfig]);
+  const postWithRetries = async (url, body, attempts = 3) => {
+    for (let i = 0; i < attempts; i++) {
+      try {
+        const res = await axios.post(url, body, { timeout: 5000 })
+        return res
+      } catch (e) {
+        if (i === attempts - 1) throw e
+        await new Promise(r => setTimeout(r, 500))
+      }
+    }
+  }
 
   const enviarComandoManutencao = async (boxId, comandoTipo, e) => {
-    e.stopPropagation();
-
-    if (loadingStates[boxId]) return;
-
-    const comando = comandoTipo === 'ON' ? "MANUTENCAO_ON" : "MANUTENCAO_OFF";
-    // Aqui define true ou false corretamente
-    const novoStatusBooleano = comandoTipo === 'ON';
-
-    setLoadingStates(prev => ({ ...prev, [boxId]: true }));
-
-    // 1. FORÇA O STATUS NO REF IMEDIATAMENTE
-    // Isso impede que o fetchVisaoGeral sobrescreva com dados antigos do servidor
-    forcedStatusRef.current[boxId] = novoStatusBooleano;
-
-    // 2. Atualização Visual Otimista
-    setResumoEstoque(prev => ({
-      ...prev,
-      [boxId]: {
-        ...prev[boxId],
-        emManutencao: novoStatusBooleano
-      }
-    }));
-
+    if (e && e.stopPropagation) e.stopPropagation()
+    if (loadingStates[boxId]) return
+    const comando = comandoTipo === 'ON' ? "MANUTENCAO_ON" : "MANUTENCAO_OFF"
+    const novoStatusBooleano = comandoTipo === 'ON'
+    setLoadingStates(prev => ({ ...prev, [boxId]: true }))
+    forcedStatusRef.current[boxId] = novoStatusBooleano
+    forcedExpiryRef.current[boxId] = Date.now() + 10000
+    setResumoEstoque(prev => ({ ...prev, [boxId]: { ...prev[boxId], emManutencao: novoStatusBooleano } }))
     try {
-      await axios.post(`${API_URL}/controle/${boxId}`, { comando });
-      console.log(`Comando ${comando} enviado para ${boxId}`);
- 
-      // 3. Mantemos o status "travado" por 5 segundos.
-      // Isso dá tempo para o ESP32 receber, processar e o backend atualizar.
-      // Só depois de 5s voltamos a acreditar no que o servidor diz.
+      await postWithRetries(`${API_URL}/controle/${boxId}`, { comando }, 3)
       setTimeout(() => {
-         delete forcedStatusRef.current[boxId]; // Libera a trava
-         
-         setLoadingStates(prev => {
-             const copy = { ...prev };
-             delete copy[boxId];
-             return copy;
-         });
-      }, 5000); 
-
+        delete forcedExpiryRef.current[boxId]
+        delete forcedStatusRef.current[boxId]
+        setLoadingStates(prev => {
+          const copy = { ...prev }
+          delete copy[boxId]
+          return copy
+        })
+      }, 2000)
     } catch (error) {
-      console.error("Erro ao enviar comando", error);
-      alert("Falha na conexão.");
-      
-      // Se der erro, liberamos a trava imediatamente e revertemos
-      delete forcedStatusRef.current[boxId];
-      
-      setResumoEstoque(prev => ({
-        ...prev,
-        [boxId]: { ...prev[boxId], emManutencao: !novoStatusBooleano }
-      }));
-      
+      delete forcedExpiryRef.current[boxId]
+      delete forcedStatusRef.current[boxId]
+      setResumoEstoque(prev => ({ ...prev, [boxId]: { ...prev[boxId], emManutencao: !novoStatusBooleano } }))
       setLoadingStates(prev => {
-          const copy = { ...prev };
-          delete copy[boxId];
-          return copy;
-      });
+        const copy = { ...prev }
+        delete copy[boxId]
+        return copy
+      })
+      window.alert('Falha na conexão com a caixa.')
     }
-  };
+  }
 
   useEffect(() => {
-    fetchVisaoGeral(); 
-    const id = setInterval(fetchVisaoGeral, 3000);
-    return () => clearInterval(id);
-  }, [fetchVisaoGeral]);
+    fetchVisaoGeral()
+    const id = setInterval(fetchVisaoGeral, 3000)
+    return () => clearInterval(id)
+  }, [fetchVisaoGeral])
 
-  const formatTemp = (t) => (typeof t === 'number' && !Number.isNaN(t)) ? `${t.toFixed(1)}°C` : '--';
+  const formatTemp = (t) => (typeof t === 'number' && !Number.isNaN(t)) ? `${t.toFixed(1)}°C` : '--'
 
   return (
     <div className="menu-container">
       <h2 style={{ color: '#1e293b', marginBottom: 20 }}>Monitoramento de Lotes</h2>
-
       <div className="caixa-grid">
         {(estoqueConfig || []).map((item) => {
-          const dados = resumoEstoque[item.id];
-          const isLoadingSwitch = loadingStates[item.id];
-          
-          let corStatus = '#cbd5e1'; let statusLabel = 'AGUARDANDO'; let classeAnimacao = 'status-offline'; let icone = '❄️';
-          const score = dados ? dados.score : null;
-
+          const dados = resumoEstoque[item.id]
+          const isLoadingSwitch = loadingStates[item.id]
+          let corStatus = '#cbd5e1'
+          let statusLabel = 'AGUARDANDO'
+          let classeAnimacao = 'status-offline'
+          let icone = '❄️'
+          const score = dados ? dados.score : null
           if (!dados || dados.erro || dados.status_operacional === 'OFFLINE') {
-             corStatus = '#94a3b8'; statusLabel = 'OFFLINE'; classeAnimacao = 'status-offline'; icone = '📡';
+            corStatus = '#94a3b8'
+            statusLabel = 'OFFLINE'
+            classeAnimacao = 'status-offline'
+            icone = '📡'
           } else if (dados.violacao || dados.tampa_aberta) {
-             corStatus = '#ef4444'; statusLabel = 'VIOLAÇÃO'; classeAnimacao = 'status-danger'; icone = '🚨';
+            corStatus = '#ef4444'
+            statusLabel = 'VIOLAÇÃO'
+            classeAnimacao = 'status-danger'
+            icone = '🚨'
           } else if (dados.temp !== null && (dados.temp < 2.0 || dados.temp > 8.0)) {
-             corStatus = '#eab308'; statusLabel = 'ALERTA'; classeAnimacao = 'status-warning'; icone = '⚠️';
+            corStatus = '#eab308'
+            statusLabel = 'ALERTA'
+            classeAnimacao = 'status-warning'
+            icone = '⚠️'
           } else {
-             corStatus = '#22c55e'; statusLabel = score !== null ? `${score}% Saúde` : 'ESTÁVEL'; classeAnimacao = 'status-ok'; icone = '❄️';
+            corStatus = '#22c55e'
+            statusLabel = score !== null ? `${score}% Saúde` : 'ESTÁVEL'
+            classeAnimacao = 'status-ok'
+            icone = '❄️'
           }
-
-          const isOfflineOrAguardando = dados?.erro === true || dados?.status_operacional === 'AGUARDANDO' || dados?.status_operacional === 'OFFLINE';
-          const isManutencao = dados?.emManutencao || false;
-
+          const isOfflineOrAguardando = dados?.erro === true || dados?.status_operacional === 'AGUARDANDO' || dados?.status_operacional === 'OFFLINE'
+          const isManutencao = dados?.emManutencao || false
           return (
             <div
               key={item.id}
@@ -237,10 +241,8 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                   {statusLabel}
                 </span>
               </div>
-
               <h3>{item.nome}</h3>
               <p style={{ color: '#64748b', fontSize: '0.85rem', marginBottom: 15 }}>{item.conteudo} • {item.local}</p>
-
               <div className="caixa-stats-row">
                 <div className="stat-item">
                   <small>Temp.</small>
@@ -251,9 +253,8 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                   <strong style={{ color: corStatus }}>{statusLabel}</strong>
                 </div>
               </div>
-
-              <div style={{ 
-                  marginTop: 20, 
+              <div style={{
+                  marginTop: 20,
                   backgroundColor: '#f8fafc',
                   padding: '10px',
                   borderRadius: '8px',
@@ -268,17 +269,15 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                         {isLoadingSwitch ? 'Processando...' : (isManutencao ? 'Ativo' : 'Inativo')}
                     </span>
                 </div>
-                
                 <div style={styles.btnGroup}>
-                    <button 
+                    <button
                         style={styles.btnAction('ON', isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
                         onClick={(e) => enviarComandoManutencao(item.id, 'ON', e)}
                         disabled={isManutencao || isOfflineOrAguardando || isLoadingSwitch}
                     >
                         ATIVAR
                     </button>
-                    
-                    <button 
+                    <button
                         style={styles.btnAction('OFF', !isManutencao, isOfflineOrAguardando || isLoadingSwitch)}
                         onClick={(e) => enviarComandoManutencao(item.id, 'OFF', e)}
                         disabled={!isManutencao || isLoadingSwitch}
@@ -288,9 +287,9 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
                 </div>
               </div>
             </div>
-          );
+          )
         })}
       </div>
     </div>
-  );
+  )
 }
