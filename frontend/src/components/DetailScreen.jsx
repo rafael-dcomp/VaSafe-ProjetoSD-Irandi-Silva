@@ -17,7 +17,8 @@ const THEME = {
   success: '#22c55e',
   dark: '#1e293b',
   grid: '#f1f5f9',
-  textMuted: '#94a3b8'
+  textMuted: '#94a3b8',
+  invalid: '#334155' 
 };
 
 const CustomTooltip = ({ active, payload, label }) => {
@@ -42,7 +43,6 @@ const CustomTooltip = ({ active, payload, label }) => {
 export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
   const [analise, setAnalise] = useState(null);
   const [lastUpdate, setLastUpdate] = useState(null);
-  const [syncing, setSyncing] = useState(false);
 
   const fetchDetalhe = useCallback(async () => {
     try {
@@ -72,11 +72,11 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
 
   const telemetria = analise.telemetria ?? {};
   const analise_risco = analise.analise_risco ?? {};
-
-  const isViolado = Boolean(telemetria.violacao);
+  const healthScore = analise_risco.health_score;
+  const isOffline = healthScore === null || analise_risco.status_operacional === 'OFFLINE';
+  const isLoteInvalido = !isOffline && healthScore === 0;
+  const isViolado = !isOffline && !isLoteInvalido && Boolean(telemetria.violacao);
   const isAberta = Boolean(telemetria.tampa_aberta);
-  const isOffline = analise_risco.health_score === null || analise_risco.status_operacional === 'OFFLINE';
-
   const historicoRaw = Array.isArray(telemetria.historico) ? telemetria.historico.slice() : [];
   
   const chartData = historicoRaw
@@ -94,13 +94,19 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
     }));
 
   const displayTemp = (v) => (typeof v === 'number' ? `${v.toFixed(1)}°C` : '--');
-  const displayBattery = (b) => (typeof b === 'number' ? `${b}%` : '--');
-  
+
   const getHeaderColor = () => {
-    if (isViolado) return THEME.danger;
     if (isOffline) return THEME.textMuted;
-    if (isAberta) return THEME.warning;
-    return THEME.dark;
+    if (isLoteInvalido) return THEME.invalid; // Prioridade Alta: Lote Perdido
+    if (isViolado) return THEME.danger;       // Prioridade Média: Violação
+    if (isAberta) return THEME.warning;       // Prioridade Baixa: Alerta
+    return THEME.success;                     // Normal
+  };
+  const getHeaderText = () => {
+    if (isOffline) return 'OFFLINE';
+    if (isLoteInvalido) return 'LOTE INVÁLIDO / PERDA TOTAL';
+    if (isViolado) return 'VIOLAÇÃO DETECTADA';
+    return 'Monitoramento Ativo';
   };
 
   return (
@@ -119,30 +125,29 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
           </div>
         </div>
       </div>
-
       <div className="status-banner" style={{ borderLeft: `6px solid ${getHeaderColor()}` }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: 15 }}>
           <h2 style={{ color: getHeaderColor(), margin: 0 }}>
-            {isOffline ? 'OFFLINE' : (isViolado ? 'VIOLAÇÃO DETECTADA' : 'Monitoramento Ativo')}
+            {getHeaderText()}
           </h2>
-          {isAberta && !isViolado && !isOffline && (
+          {isAberta && !isViolado && !isLoteInvalido && !isOffline && (
             <span className="tag-warning">TAMPA ABERTA</span>
           )}
         </div>
         
         <StatusBadge 
-          status={analise_risco.status_operacional ?? '---'}
+          status={isLoteInvalido ? 'CRÍTICO' : (analise_risco.status_operacional ?? '---')}
           cor={analise_risco.indicador_led ?? '#ccc'}
-          recomendacao={analise_risco.recomendacao}
+          recomendacao={isLoteInvalido ? "Descartar lote imediatamente." : analise_risco.recomendacao}
         />
       </div>
 
       <div className="stats-grid">
         <StatCard
           titulo="Saúde"
-          valor={analise_risco.health_score ?? '--'}
+          valor={healthScore ?? '--'}
           unidade={isOffline ? '' : '%'}
-          cor={(analise_risco.health_score ?? 100) < 60 ? THEME.danger : THEME.success}
+          cor={isLoteInvalido ? THEME.invalid : ((healthScore ?? 100) < 60 ? THEME.danger : THEME.success)}
           icon="❤️"
         />
         <StatCard
@@ -154,9 +159,9 @@ export default function DetailScreen({ caixaId, caixaNome, onVoltar }) {
         />
         <StatCard
           titulo="Segurança"
-          valor={isViolado ? 'CRÍTICO' : (isAberta ? 'ALERTA' : 'OK')}
+          valor={isLoteInvalido ? 'INVÁLIDO' : (isViolado ? 'VIOLADO' : (isAberta ? 'ALERTA' : 'OK'))}
           unidade=""
-          cor={isViolado ? THEME.danger : (isAberta ? THEME.warning : THEME.success)}
+          cor={isLoteInvalido ? THEME.invalid : (isViolado ? THEME.danger : (isAberta ? THEME.warning : THEME.success))}
           icon="🔒"
         />
       </div>
