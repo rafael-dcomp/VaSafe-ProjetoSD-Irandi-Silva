@@ -251,7 +251,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
           const dados = resumoEstoque[item.id]
           
           const pendingTarget = dados?.pendingTarget
-          const isProcessingAny = pendingTarget !== undefined && pendingTarget !== null
+          const hasPendingAction = pendingTarget !== undefined && pendingTarget !== null
           
           let corStatus = '#cbd5e1'
           let statusLabel = 'AGUARDANDO'
@@ -288,20 +288,23 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
           let connectionColor = '#94a3b8'
           let connectionWeight = 'normal'
 
-          if (isProcessingAny) {
+          const isSynced = !hasPendingAction || (hasPendingAction && pendingTarget === isManutencao)
+
+          if (!isSynced) {
              connectionLabel = 'Sincronizando com a ESP...'
              connectionColor = '#f59e0b'
              connectionWeight = 'bold'
           } else if (isManutencao) {
              connectionLabel = 'Conectado com a ESP'
-             connectionColor = '#22c55e' 
+             connectionColor = '#22c55e'
              connectionWeight = 'bold'
           }
+
           const isProcessingOn = pendingTarget === true
-          const disabledOn = isOfflineOrAguardando || (isManutencao && !isProcessingAny) || isProcessingOn
+          const disabledOn = isOfflineOrAguardando || (isManutencao && !hasPendingAction) || isProcessingOn
 
           const isProcessingOff = pendingTarget === false
-          const disabledOff = (!isManutencao && !isProcessingAny) || isProcessingOff
+          const disabledOff = (!isManutencao && !hasPendingAction) || isProcessingOff
 
           return (
             <div
