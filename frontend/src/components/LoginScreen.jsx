@@ -2,7 +2,7 @@ import { useState } from 'react';
 import axios from 'axios';
 import completo from '../assets/completo.png'; 
 
-const API_URL = "http://98.90.117.5:8000";
+const API_URL = "/api";
 
 export default function LoginScreen({ onLoginSuccess }) {
   const [user, setUser] = useState(""); 

@@ -8,7 +8,7 @@ import StatCard from './StatCard';
 
 import '../App.css'; 
 
-const API_URL = "http://98.90.117.5:8000";
+const API_URL = "/api";
 
 const THEME = {
   primary: '#3b82f6',

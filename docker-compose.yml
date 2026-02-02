@@ -6,8 +6,8 @@ services:
     container_name: mosquitto
     restart: always
     ports:
-      - "1883:1883"      # ESP32 / host
-      - "9001:9001"      # WebSocket (opcional)
+      - "1883:1883"
+      - "9001:9001"
     volumes:
       - ./config/mosquitto.conf:/mosquitto/config/mosquitto.conf
       - mosquitto_data:/mosquitto/data
@@ -19,8 +19,9 @@ services:
     image: influxdb:2.7
     container_name: influxdb
     restart: always
-    ports:
-      - "8086:8086"
+    # Portas comentadas pois o acesso externo será via rede interna ou Nginx (se configurado)
+    # ports:
+    #   - "8086:8086" 
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
@@ -37,8 +38,9 @@ services:
     build: ./backend
     container_name: api_backend
     restart: always
-    ports:
-      - "8000:8000"
+    # Não expomos a porta 8000 para fora, o Nginx fala com ela internamente
+    expose:
+      - "8000"
     environment:
       MQTT_BROKER: mosquitto
       MQTT_PORT: 1883
@@ -55,9 +57,28 @@ services:
   frontend:
     build: ./frontend
     container_name: frontend
-    ports:
-      - "5173:5173"
+    # Não expomos a 5173 para fora, o Nginx fala com ela
+    expose:
+      - "5173"
+    environment:
+      # O Vite precisa saber que deve aceitar conexões do host
+      - HOST=0.0.0.0
     depends_on:
+      - api
+    networks:
+      - vasafe_net
+
+  # === NOVO SERVIÇO: NGINX (O PROXY) ===
+  nginx:
+    image: nginx:latest
+    container_name: nginx_proxy
+    restart: always
+    ports:
+      - "80:80" # A ÚNICA porta que precisa estar aberta no seu PC
+    volumes:
+      - ./nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
       - api
     networks:
       - vasafe_net

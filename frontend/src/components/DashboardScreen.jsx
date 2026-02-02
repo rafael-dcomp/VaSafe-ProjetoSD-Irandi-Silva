@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 
-const API_URL = "http://98.90.117.5:8000"
+const API_URL = "/api";
 const STORAGE_KEY = 'lote_pending_actions'
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
