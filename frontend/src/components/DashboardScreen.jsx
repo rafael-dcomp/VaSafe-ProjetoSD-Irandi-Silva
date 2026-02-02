@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from 'react'
 import axios from 'axios'
 
-const API_URL = "/api"
+const API_URL = "/api";
 const STORAGE_KEY = 'lote_pending_actions'
 
 export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
@@ -264,7 +264,7 @@ export default function DashboardScreen({ estoqueConfig = [], onSelectCaixa }) {
             statusLabel = 'OFFLINE'
             classeAnimacao = 'status-offline'
             icone = '📡'
-          } else if (dados.tampa_aberta || dados.violacao) {
+          } else if (dados.violacao || dados.tampa_aberta) {
             corStatus = '#ef4444'
             statusLabel = 'VIOLAÇÃO'
             classeAnimacao = 'status-danger'
