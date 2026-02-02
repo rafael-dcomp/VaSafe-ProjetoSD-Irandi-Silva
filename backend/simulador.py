@@ -5,138 +5,103 @@ import random
 
 MQTT_BROKER = "98.90.117.5"
 MQTT_PORT = 1883
+TOPIC_SETUP = "vasafe/setup/qtd"
 TOPIC_BASE = "vasafe/"
-TOPIC_CONFIG = "vasafe/setup/qtd"  
 
-QTD_TOTAL_CAIXAS = 30 
-INICIO_ID = 2 
+qtd_caixas_total = 20
+caixas_virtuais = []
 
-print(f"\n--- INICIANDO SIMULADOR V4 (CONTROLÁVEL VIA MQTT) ---")
-print(f"--- Aguardando comandos no tópico: {TOPIC_CONFIG} ---")
-print(f"--- Qtd Atual: {QTD_TOTAL_CAIXAS} caixas ---")
+class CaixaVirtual:
+    def __init__(self, id_num):
+        self.id = f"box_{id_num:02d}"
+        self.buffer = []
+        self.contador = 0
+        self.temperatura = 5.0
 
-client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "Simulador_Remoto")
+    def processar(self, client):
+        variacao = random.uniform(-0.3, 0.4)
+        self.temperatura += variacao
+        if self.temperatura < 2.0: self.temperatura = 2.0
+        if self.temperatura > 9.0: self.temperatura = 9.0
 
-def on_message(client, userdata, msg):
-    global QTD_TOTAL_CAIXAS
-    try:
-        if msg.topic == TOPIC_CONFIG:
-            novo_valor = int(msg.payload.decode())
-            if novo_valor > 0 and novo_valor <= 200: 
-                QTD_TOTAL_CAIXAS = novo_valor
-                print(f"\nCOMANDO RECEBIDO: Atualizando para {QTD_TOTAL_CAIXAS} caixas!\n")
-            else:
-                print(f"\n Valor inválido recebido: {novo_valor}")
-    except Exception as e:
-        print(f"Erro ao processar comando: {e}")
+        aberta = False
+        if random.random() < 0.01:
+            aberta = True
+            self.temperatura += 2.0
+
+        leitura = {
+            "box_id": self.id,
+            "temperatura": round(self.temperatura, 2),
+            "aberta": aberta
+        }
+
+        self.buffer.append(leitura)
+        self.contador += 1
+
+        if self.contador >= 5:
+            topic = f"{TOPIC_BASE}{self.id}/telemetria"
+            
+            print(f"[AUDITORIA] Iniciando envio em lote: {self.id}")
+            
+            for dados in self.buffer:
+                payload_json = json.dumps(dados)
+                client.publish(topic, payload_json)
+                print(f"[ENVIADO] Topico: {topic} | Payload: {payload_json}")
+                time.sleep(0.05)
+            
+            self.buffer = []
+            self.contador = 0
+
+def recriar_ambiente(quantidade):
+    global caixas_virtuais
+    caixas_virtuais = []
+    
+    if quantidade < 2:
+        print("Modo apenas fisico. Simulador em espera.")
+        return
+
+    for i in range(2, quantidade + 1):
+        caixas_virtuais.append(CaixaVirtual(i))
+    
+    print(f"Ambiente reconfigurado. Caixas virtuais ativas: {len(caixas_virtuais)}")
 
 def on_connect(client, userdata, flags, reason_code, properties):
     if reason_code == 0:
-        print("Conectado ao Broker MQTT!")
-        client.subscribe(TOPIC_CONFIG)
+        print(f"Conectado ao Broker: {MQTT_BROKER}")
+        client.subscribe(TOPIC_SETUP)
+        recriar_ambiente(qtd_caixas_total)
     else:
-        print(f"Falha ao conectar. Código: {reason_code}")
+        print(f"Erro de conexao: {reason_code}")
 
+def on_message(client, userdata, msg):
+    global qtd_caixas_total
+    try:
+        payload = msg.payload.decode()
+        print(f"[SETUP] Nova configuracao recebida: {payload}")
+        
+        nova_qtd = int(payload)
+        if nova_qtd != qtd_caixas_total:
+            qtd_caixas_total = nova_qtd
+            recriar_ambiente(qtd_caixas_total)
+            
+    except Exception as e:
+        print(f"Erro ao processar mensagem: {e}")
+
+client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, "Simulador_Auditoria_V5")
 client.on_connect = on_connect
-client.on_message = on_message 
+client.on_message = on_message
 
 try:
     client.connect(MQTT_BROKER, MQTT_PORT, 60)
     client.loop_start()
-    time.sleep(1) 
-except Exception as e:
-    print(f"❌ Erro crítico: {e}")
-    exit()
 
-ciclo_drama = 0 
-
-def gerar_dados_drama(box_id):
-    global ciclo_drama
-    ciclo_drama += 1
-    
-    payload = {"box_id": box_id}
-    status_desc = ""
-    
-    if ciclo_drama <= 3:
-        temp = round(random.uniform(4.0, 5.0), 1)
-        luz = 3000
-        status_desc = "Normal"
-    elif ciclo_drama <= 6:
-        temp = round(8.5 + (ciclo_drama * 0.1), 1) 
-        luz = 3000
-        status_desc = "Alerta Temp"
-    elif ciclo_drama <= 9:
-        temp = 12.0
-        luz = 300 
-        status_desc = "VIOLAÇÃO"
-    else:
-        status_desc = "Reset"
-        temp = 5.0
-        luz = 3000
-        if ciclo_drama >= 10: 
-            ciclo_drama = 0 
-
-    aberta = (luz < 600)
-    payload["temperatura"] = temp
-    payload["luz"] = luz
-    payload["aberta"] = aberta
-    
-    if aberta:
-        payload["alerta"] = "EVENTO_CRITICO"
-
-    return payload, status_desc
-
-def gerar_dados_normal(box_id):
-    temp = round(random.uniform(3.0, 6.0), 1)
-    luz = random.randint(2500, 4095)
-    return {
-        "box_id": box_id,
-        "temperatura": temp,
-        "luz": luz,
-        "aberta": False 
-    }
-
-try:
     while True:
-        qtd_atual = QTD_TOTAL_CAIXAS 
+        if len(caixas_virtuais) > 0:
+            for caixa in caixas_virtuais:
+                caixa.processar(client)
         
-        print(f"\n--- Enviando para {qtd_atual} Caixas ({time.strftime('%H:%M:%S')}) ---")
-        
-        for i in range(INICIO_ID, qtd_atual + 1):
-
-            suffix = f"0{i}" if i < 10 else str(i)
-            box_id = f"box_{suffix}"
-            topic = f"{TOPIC_BASE}{box_id}/telemetria"
-            
-            payload = {}
-            msg_log = ""
-
-            if i == 2:
-                payload, desc = gerar_dados_drama(box_id)
-                msg_log = f"[{box_id}] {desc} | T:{payload['temperatura']}°C"
-            elif i == 3:
-                payload = {"box_id": box_id, "temperatura": 9.0, "luz": 3000, "aberta": False}
-                msg_log = f"[{box_id}] Quente | T:9.0°C"
-            elif i == 4:
-                payload = {"box_id": box_id, "temperatura": 1.0, "luz": 3000, "aberta": False}
-                msg_log = f"[{box_id}] Frio | T:1.0°C"
-            elif i == 5:
-                payload = {"box_id": box_id, "temperatura": 10.0, "luz": 100, "aberta": True}
-                msg_log = f"[{box_id}] ABERTA | Luz:100"
-            else:
-                payload = gerar_dados_normal(box_id)
-                msg_log = f"[{box_id}] Normal | T:{payload['temperatura']}°C"
-
-            client.publish(topic, json.dumps(payload))
-            print(msg_log)
-    
-            delay = 0.05 if qtd_atual < 50 else 0.01
-            time.sleep(delay)
-
-        print("-" * 30)
-        time.sleep(2) 
+        time.sleep(1.0)
 
 except KeyboardInterrupt:
-    print("\nSimulador encerrado.")
     client.loop_stop()
     client.disconnect()
