@@ -19,9 +19,6 @@ services:
     image: influxdb:2.7
     container_name: influxdb
     restart: always
-    # Portas comentadas pois o acesso externo será via rede interna ou Nginx (se configurado)
-    # ports:
-    #   - "8086:8086" 
     environment:
       DOCKER_INFLUXDB_INIT_MODE: setup
       DOCKER_INFLUXDB_INIT_USERNAME: admin
@@ -38,7 +35,6 @@ services:
     build: ./backend
     container_name: api_backend
     restart: always
-    # Não expomos a porta 8000 para fora, o Nginx fala com ela internamente
     expose:
       - "8000"
     environment:
@@ -57,24 +53,21 @@ services:
   frontend:
     build: ./frontend
     container_name: frontend
-    # Não expomos a 5173 para fora, o Nginx fala com ela
     expose:
       - "5173"
     environment:
-      # O Vite precisa saber que deve aceitar conexões do host
       - HOST=0.0.0.0
     depends_on:
       - api
     networks:
       - vasafe_net
 
-  # === NOVO SERVIÇO: NGINX (O PROXY) ===
   nginx:
     image: nginx:latest
     container_name: nginx_proxy
     restart: always
     ports:
-      - "80:80" # A ÚNICA porta que precisa estar aberta no seu PC
+      - "80:80" 
     volumes:
       - ./nginx.conf:/etc/nginx/nginx.conf:ro
     depends_on:
