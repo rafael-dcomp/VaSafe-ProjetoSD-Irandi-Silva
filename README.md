@@ -4,7 +4,7 @@ Desenvolvimento do Projeto da disciplina de Sistemas Distribuídos (UFS).
 O **VaSafe** é uma solução de Digital Twin para monitoramento em tempo real de cadeias de frio (transporte de vacinas, órgãos e medicamentos sensíveis).
 
 ## 🔗 Links do Projeto
-* **Slides de Apresentação:** [Acessar Slides no Gamma](https://gamma.app/docs/VaSafe-Projeto-SD-wa4v7q0jh2ahnss)
+* **Slides de Apresentação:** [Acessar Slides no Gamma](https://gamma.app/docs/VaSafe-Monitoramento-Inteligente-e-Resiliente-para-Cadeia-de-Frio-ut9epss0s5vjoj6)
 * **Documento de Descrição:** [Acessar Google Docs](https://docs.google.com/document/d/1AF8GmFV52RN8By7BRZ-GfXvggemC5JP32hmq65LiBIg/edit?usp=sharing)
 
 ---
